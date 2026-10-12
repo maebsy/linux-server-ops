@@ -14,7 +14,7 @@
 - **재현 가능한 서버 구성** — `setup/` 스크립트 7개(멱등, `DRY_RUN=1` 미리 보기, 설정 백업, `sshd -t` 실패 시 자동 복구)
 - **증빙 자동 수집** — `verify/collect-evidence.sh` 가 체크리스트 8개 항목을 `docs/evidence/*.txt` 로 저장, **계정별 실제 접근 테스트** 매트릭스 포함
 - **제공 바이너리로 실제 검증** — Boot Sequence 5단계 통과까지 확인하며 발견한 명세와 실제 동작의 차이를 기록
-- **테스트 68개 + ShellCheck 경고 0** — Ubuntu 22.04 / 24.04 에서 통과
+- **테스트 69개 + ShellCheck 경고 0** — Ubuntu 22.04 / 24.04 에서 통과
 
 ## 목차
 
@@ -183,7 +183,7 @@ linux-server-ops/
 │   └── logrotate.d/agent-app # (대안) logrotate 방식
 ├── verify/collect-evidence.sh
 ├── tests/
-│   ├── run-tests.sh          # 68개 항목
+│   ├── run-tests.sh          # 69개 항목
 │   └── fake_agent_app.py     # 테스트용 가짜 앱 (포트 LISTEN)
 └── docs/
     ├── report.md             # 요구사항 수행 내역서 (제출 문서)

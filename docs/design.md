@@ -81,7 +81,8 @@ main
 | CPU | `/proc/stat` 첫 줄을 1초 간격으로 두 번 읽어 `100 × (1 − Δidle / Δtotal)` (idle = idle + iowait) | `top -bn1` 의 첫 화면은 부팅 이후 평균이라 "지금" 사용률이 아니다. 출력 형식도 버전·로케일마다 다르다 |
 | MEM | `/proc/meminfo` 의 `(MemTotal − MemAvailable) / MemTotal` | `MemFree` 로 계산하면 페이지 캐시(필요하면 바로 반환되는 메모리)까지 '사용 중' 으로 세서 항상 높게 나온다 |
 | DISK | `df -P /` 의 Use% | `-P`(POSIX)는 장치 이름이 길어도 한 줄로 고정돼 열 번호가 밀리지 않는다 |
-| 프로세스 | `ps -o %cpu=,%mem=,rss=,nlwp= -p PID` | 콘솔 표시와 B4-2 확장 로그용 |
+| 프로세스 CPU | `/proc/<pid>/stat` 의 utime+stime 을 시스템 CPU 와 **같은 1초 구간**에서 두 번 읽은 차이 | `ps -o %cpu` 는 "프로세스 시작 이후 평균" 이라 오래 돈 프로세스의 급등이 묻힌다 |
+| 프로세스 MEM | `ps -o %mem=,rss=,nlwp= -p PID` | 콘솔 표시와 B4-2 확장 로그(RSS 추이)용 |
 
 모든 계산은 `LC_ALL=C` 에서 `awk` 로 합니다. bash 는 소수 연산을 못 하고, 로케일에 따라 소수점이 `,` 가 되는 것을 막기 위해서입니다.
 
@@ -138,11 +139,11 @@ cron 은 **로그인 셸이 아닙니다.** `~/.bashrc`, `/etc/profile.d/*` 를 
 
 ## 7. 테스트
 
-`bash tests/run-tests.sh` — root 나 실제 서버 설정 없이 임시 폴더와 가짜 앱으로 68개 항목을 검사합니다. Ubuntu 22.04(VM, `ss` 경로)와 Ubuntu 24.04(컨테이너, `/proc/net/tcp` 경로) 양쪽에서 모두 통과를 확인했습니다.
+`bash tests/run-tests.sh` — root 나 실제 서버 설정 없이 임시 폴더와 가짜 앱으로 69개 항목을 검사합니다. Ubuntu 22.04(VM, `ss` 경로)와 Ubuntu 24.04(컨테이너, `/proc/net/tcp` 경로) 양쪽에서 모두 통과를 확인했습니다.
 
 | 영역 | 확인 내용 |
 | --- | --- |
-| monitor.sh | 정상/프로세스 없음/포트 없음(exit 1), 이름에 agent-app 이 들어간 `*.sh` 오탐 없음, 임계값 경고(종료 안 함), 방화벽 비활성 경고, 로그 포맷 정규식, `>>` 누적, 순환 후 파일 수 상한, 실행 환경 오류(exit 2) |
+| monitor.sh | 정상/프로세스 없음/포트 없음(exit 1), 프로세스 순간 CPU(바쁜 프로세스 ≥ 50%), 이름에 agent-app 이 들어간 `*.sh` 오탐 없음, 임계값 경고(종료 안 함), 방화벽 비활성 경고, 로그 포맷 정규식, `>>` 누적, 순환 후 파일 수 상한, 실행 환경 오류(exit 2) |
 | report.sh | 평균·최대·최소·시각, 구간 필터, `--last`, 순환 파일 포함, 형식 다른 줄 제외, 잘못된 입력 |
 | log-retention.sh | 7일 경계(6일은 유지), 30일 경계(29일은 유지), 무결성, 수정 시각 보존, dry-run, 디렉토리 없음 |
 | 전체 | `bash -n` 문법, ShellCheck(있으면) |

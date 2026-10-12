@@ -78,6 +78,16 @@ section "monitor.sh: extended 로그 형식 (B4-2 재사용)"
 OUT="$(MONITOR_LOG="$TMP/ext.log" MONITOR_LOG_FORMAT=extended "$MON" --no-stats 2>&1)"
 check "프로세스 RSS·스레드 필드 추가" grep -Eq 'P_CPU:[0-9.]+% P_MEM:[0-9.]+% RSS:[0-9.]+MB THREADS:[0-9]+ FIREWALL:active$' "$TMP/ext.log"
 
+section "monitor.sh: 프로세스 순간 CPU (ps 평균이 아니라 측정 구간의 사용률)"
+stop_app
+start_app "$PORT" --busy
+sleep 1
+OUT="$(MONITOR_LOG="$TMP/busy.log" MONITOR_LOG_FORMAT=extended CPU_SAMPLE_SEC=1 "$MON" --no-stats 2>&1)"
+pcpu="$(grep -o 'P_CPU:[0-9.]*' "$TMP/busy.log" | cut -d: -f2)"
+check "CPU 를 계속 쓰는 프로세스는 P_CPU ≥ 50% (측정값: ${pcpu:-없음}%)" awk -v v="${pcpu:-0}" 'BEGIN { exit !(v >= 50) }'
+stop_app
+start_app "$PORT"
+
 section "monitor.sh: Health Check 실패"
 stop_app
 before="$(wc -l < "$AGENT_LOG_DIR/monitor.log")"

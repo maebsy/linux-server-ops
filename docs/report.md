@@ -362,4 +362,4 @@ Range   : 2026-02-25 13:00:00 ~ 2026-02-25 14:00:00
 | [`bin/run-agent.sh`](../bin/run-agent.sh) | 앱 실행 도우미 (일반 계정 강제) |
 | [`setup/`](../setup/) | 서버 구성 자동화 (멱등, `DRY_RUN=1` 미리 보기) |
 | [`verify/collect-evidence.sh`](../verify/collect-evidence.sh) | 증빙 수집 |
-| [`tests/run-tests.sh`](../tests/run-tests.sh) | 스크립트 자동 테스트 68개 |
+| [`tests/run-tests.sh`](../tests/run-tests.sh) | 스크립트 자동 테스트 69개 |

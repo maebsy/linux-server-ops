@@ -247,8 +247,14 @@ mem_usage() {
 # DISK: df -P 는 POSIX 형식(한 줄 고정)이라 장치 이름이 길어도 줄이 밀리지 않는다.
 disk_usage() { df -P / | awk 'NR == 2 { gsub("%", "", $5); print $5 }'; }
 
-# 프로세스 자원 (콘솔 표시 + extended 로그용)
-proc_stats() { ps -o %cpu=,%mem=,rss=,nlwp= -p "$1" 2>/dev/null | awk '{ printf "%s %s %.1f %s", $1, $2, $3 / 1024, $4 }'; }
+# 프로세스 자원 (콘솔 표시 + extended 로그용): %MEM, RSS(MB), 스레드 수
+proc_stats() { ps -o %mem=,rss=,nlwp= -p "$1" 2>/dev/null | awk '{ printf "%s %.1f %s", $1, $2 / 1024, $3 }'; }
+
+# 프로세스가 지금까지 쓴 CPU 시간(utime + stime, 단위 clock tick).
+# ps 의 %cpu 는 "시작 이후 평균" 이라 급등 순간을 놓치므로, 시스템 CPU 를 재는 같은 구간에서
+# 이 값의 차이로 프로세스의 '순간' CPU 사용률을 계산한다. comm 에 공백이 있을 수 있어 ')' 뒤부터 센다.
+proc_ticks() { awk '{ sub(/^.*\) /, ""); print $12 + $13 }' "/proc/$1/stat" 2>/dev/null; }
+now_ns() { date +%s%N; }
 
 # ================================================================= 5. 로그 순환
 # monitor.log 가 MAX_LOG_SIZE_BYTES 이상이면 .1 ~ .(MAX_LOG_FILES-1) 로 밀어내고 가장 오래된 파일을 버린다.
@@ -325,11 +331,17 @@ main() {
 
     # 4) 자원
     local cpu mem disk pstat p_cpu p_mem p_rss p_thr
-    cpu="$(cpu_usage)"
+    local tick0 tick1 ns0 ns1 hz
+    hz="$(getconf CLK_TCK 2>/dev/null || echo 100)"
+    tick0="$(proc_ticks "$pid")"; ns0="$(now_ns)"
+    cpu="$(cpu_usage)"                                   # CPU_SAMPLE_SEC 동안 대기하며 측정
+    tick1="$(proc_ticks "$pid")"; ns1="$(now_ns)"
+    p_cpu="$(awk -v a="${tick0:-0}" -v b="${tick1:-0}" -v hz="$hz" -v t0="$ns0" -v t1="$ns1" \
+        'BEGIN { dt = (t1 - t0) / 1e9; printf "%.1f", (dt > 0 && b >= a) ? 100 * (b - a) / hz / dt : 0 }')"
     mem="$(mem_usage)"
     disk="$(disk_usage)"
     pstat="$(proc_stats "$pid")"
-    read -r p_cpu p_mem p_rss p_thr <<< "${pstat:-0 0 0 0}"
+    read -r p_mem p_rss p_thr <<< "${pstat:-0 0 0}"
 
     say ""
     say "[RESOURCE MONITORING]"

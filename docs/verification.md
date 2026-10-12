@@ -10,7 +10,7 @@
 | 환경 | Ubuntu 24.04 (격리 컨테이너, root 로 setup 실행 후 agent-admin 으로 앱·스크립트 실행) |
 | 바이너리 | `agent-app-linux-x86` (ELF 64-bit, sha256 `cdbae8c0…de0ff5a`) |
 | 사용 스크립트 | `setup/03·04·05·06` → `bin/run-agent.sh` → `bin/monitor.sh`, `bin/report.sh` |
-| 추가 검증 | `tests/run-tests.sh` 68개 통과 (Ubuntu 22.04 VM: `ss` 경로 / Ubuntu 24.04: `/proc/net/tcp` 경로) |
+| 추가 검증 | `tests/run-tests.sh` 69개 통과 (Ubuntu 22.04 VM: `ss` 경로 / Ubuntu 24.04: `/proc/net/tcp` 경로) |
 
 ## 1. Boot Sequence — 명세대로 설정했을 때 실패 → 원인 확인 → 통과
 
