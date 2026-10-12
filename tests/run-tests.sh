@@ -15,7 +15,15 @@ cleanup() { [[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 
 ok()   { PASS=$((PASS + 1)); printf '  \033[32mPASS\033[0m %s\n' "$1"; }
-bad()  { FAIL=$((FAIL + 1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; [[ -n "${2:-}" ]] && printf '%s\n' "$2" | sed 's/^/       | /'; }
+bad()  {
+    FAIL=$((FAIL + 1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; [[ -n "${2:-}" ]] && printf '%s\n' "$2" | sed 's/^/       | /'
+    # GitHub Actions 에서는 실패 항목을 주석(annotation)으로도 남겨 로그를 열지 않아도 보이게 한다
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+        local detail="${2:-}"; detail="${detail//'%'/'%25'}"; detail="${detail//$'\n'/'%0A'}"
+        printf '::error title=test failed::%s%%0A%s\n' "$1" "${detail:0:3000}"
+    fi
+    return 0
+}
 check() { local name="$1"; shift; if "$@"; then ok "$name"; else bad "$name" "${OUT:-}"; fi; }
 section() { printf '\n[%s]\n' "$1"; }
 
