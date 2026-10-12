@@ -1,0 +1,14 @@
+# (대안) logrotate 로 monitor.log 용량 관리 — 기본은 monitor.sh 의 내장 순환을 사용한다.
+# 이 방식을 쓰려면: sudo cp config/logrotate.d/agent-app /etc/logrotate.d/agent-app
+#                  그리고 /etc/agent-app/agent-app.env 에 MAX_LOG_SIZE_BYTES=999999999999 (내장 순환 끄기)
+# logrotate 는 보통 하루 1번(logrotate.timer) 실행되므로, 10MB 를 빨리 넘는 환경이면
+# /etc/cron.hourly 나 timer 로 더 자주 실행해야 'size' 조건이 제때 확인된다.
+/var/log/agent-app/monitor.log {
+    size 10M
+    rotate 9
+    missingok
+    notifempty
+    nocompress
+    create 0660 agent-admin agent-core
+    su agent-admin agent-core
+}
