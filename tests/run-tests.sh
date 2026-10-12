@@ -28,7 +28,7 @@ check() { local name="$1"; shift; if "$@"; then ok "$name"; else bad "$name" "${
 section() { printf '\n[%s]\n' "$1"; }
 
 export AGENT_HOME="$TMP/agent-app" AGENT_LOG_DIR="$TMP/log" AGENT_PORT="$PORT"
-export AGENT_ENV_FILE="$TMP/none.env" CPU_SAMPLE_SEC=0.2 FIREWALL=ufw UFW_CONF="$TMP/ufw.conf"
+export AGENT_ENV_FILE="$TMP/none.env" CPU_SAMPLE_SEC=0.2 FIREWALL=ufw UFW_CONF="$TMP/ufw.conf" UFW_USE_STATUS=0
 mkdir -p "$AGENT_HOME/bin" "$AGENT_LOG_DIR"
 echo "ENABLED=yes" > "$UFW_CONF"
 cp "$ROOT/bin/"*.sh "$AGENT_HOME/bin/"

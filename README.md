@@ -110,6 +110,7 @@ Process   : PID 15491 CPU 19.6% MEM 2.3% RSS 189.4MB Threads 1
 종료 코드: `0` 정상(경고 포함) · `1` Health Check 실패 · `2` 실행 환경 오류.
 모든 값은 환경변수로 바꿀 수 있습니다(`CPU_WARN`, `MEM_WARN`, `DISK_WARN`, `AGENT_PORT`, `MAX_LOG_SIZE_BYTES`, `MAX_LOG_FILES`, `APP_PROCESS_REGEX` …, `monitor.sh --help`).
 `MONITOR_LOG_FORMAT=extended` 를 주면 프로세스 RSS·스레드 수를 덧붙여 기록합니다(다음 미션 B4-2 장애 분석에서 재사용).
+방화벽은 `ufw status` → `sudo -n ufw status` → `/etc/ufw/ufw.conf` 순서로 확인합니다(일반 계정인 cron 실행자도 판단 가능). `UFW_USE_STATUS=0` 이면 설정 파일만 봅니다.
 
 ## 서버 구성 요약
 

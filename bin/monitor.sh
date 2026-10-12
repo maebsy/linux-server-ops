@@ -50,6 +50,7 @@ MAX_LOG_SIZE_BYTES="${MAX_LOG_SIZE_BYTES:-10485760}"   # 10MB
 MAX_LOG_FILES="${MAX_LOG_FILES:-10}"                   # monitor.log + monitor.log.1 ~ .9
 MONITOR_LOG_FORMAT="${MONITOR_LOG_FORMAT:-basic}"      # basic | extended (프로세스 자원 추가, B4-2 재사용)
 UFW_CONF="${UFW_CONF:-/etc/ufw/ufw.conf}"
+UFW_USE_STATUS="${UFW_USE_STATUS:-1}"                  # 1: ufw status 우선, 0: ufw.conf 만 확인
 FIREWALL="${FIREWALL:-auto}"                           # auto | ufw | firewalld | none
 
 SHOW_STATS="auto"
@@ -205,7 +206,8 @@ firewall_state() {
             # ufw status 는 root 권한이 필요하다. cron 실행자(agent-admin)는 일반 계정이므로
             #   1) ufw status (root 로 실행한 경우)  2) sudo -n ufw status (sudoers 에 허용한 경우)
             #   3) /etc/ufw/ufw.conf 의 ENABLED=yes (누구나 읽을 수 있는 설정 파일) 순서로 확인한다.
-            if out="$(ufw status 2>/dev/null)" || out="$(sudo -n ufw status 2>/dev/null)"; then
+            #   (UFW_USE_STATUS=0 이면 1·2 를 건너뛰고 설정 파일만 본다 — 테스트·sudo 금지 환경용)
+            if [[ "$UFW_USE_STATUS" == 1 ]] && { out="$(ufw status 2>/dev/null)" || out="$(sudo -n ufw status 2>/dev/null)"; }; then
                 FIREWALL_DETAIL="ufw status"
                 if [[ "$out" == *"Status: active"* ]]; then FW_STATE=active; else FW_STATE=inactive; fi
             elif [[ -r "$UFW_CONF" ]]; then
