@@ -6,7 +6,7 @@
 #   $AGENT_HOME                            agent-admin:agent-common 750
 #   $AGENT_HOME/upload_files   (공유)       agent-admin:agent-common 2770  g:agent-common:rwx + default
 #   $AGENT_HOME/api_keys       (보안)       agent-admin:agent-core   2770  g:agent-core:rwx + default, other 없음
-#   $AGENT_HOME/api_keys/t_secret.key      agent-admin:agent-core   640
+#   $AGENT_HOME/api_keys/t_secret.key      agent-admin:agent-core   640   (+ secret.key → t_secret.key 링크)
 #   $AGENT_HOME/bin                        agent-dev:agent-core     2750  (dev 가 작성, admin 이 실행)
 #   /var/log/agent-app         (보안)       agent-admin:agent-core   2770  g:agent-core:rwx + default
 #   /var/log/monitor/agent-app/archive     agent-admin:agent-core   2770  (보너스: 로그 보존)
@@ -55,6 +55,10 @@ else
 fi
 run chown agent-admin:agent-core "$KEY_FILE"
 run chmod 640 "$KEY_FILE"
+# 제공 바이너리는 api_keys/secret.key 를 읽는다 (Boot [3/5] "Missing File: secret.key").
+# 과제 명세의 t_secret.key 를 원본으로 두고 secret.key 는 심볼릭 링크로 연결해 값이 하나만 존재하게 한다.
+run ln -sfn t_secret.key "$AGENT_HOME/api_keys/secret.key"
+run chown -h agent-admin:agent-core "$AGENT_HOME/api_keys/secret.key"
 
 echo
 info "확인"

@@ -4,6 +4,10 @@
 #   /etc/agent-app/agent-app.env   KEY=VALUE 원본 (monitor.sh, run-agent.sh, cron 이 읽음)
 #   /etc/profile.d/agent-app.sh    로그인 셸에서 위 파일을 export
 #
+# AGENT_KEY_PATH 는 과제 문서에 '$AGENT_HOME/api_keys/t_secret.key' 로 나오지만, 제공 바이너리는
+# 디렉토리 경로를 요구한다 (파일 경로를 주면 Boot [2/5] 에서 "Key Path Mismatch. Expected: …/api_keys").
+# 실제 실행 결과를 근거로 디렉토리 경로를 쓴다 → docs/report.md '명세와 실제 동작의 차이' 참고.
+#
 # 왜 파일 하나로 모으나: 로그인 셸(.bashrc)과 cron(로그인 셸이 아님, 환경이 거의 비어 있음)이
 # 서로 다른 값을 보면 "수동 실행은 되는데 cron 에서는 실패" 하는 전형적인 장애가 생긴다.
 set -euo pipefail
@@ -14,7 +18,7 @@ content="# agent-app 실행 환경 (setup/05-environment.sh 가 생성)
 AGENT_HOME=$AGENT_HOME
 AGENT_PORT=$AGENT_PORT
 AGENT_UPLOAD_DIR=$AGENT_HOME/upload_files
-AGENT_KEY_PATH=$AGENT_HOME/api_keys/t_secret.key
+AGENT_KEY_PATH=$AGENT_HOME/api_keys
 AGENT_LOG_DIR=$AGENT_LOG_DIR"
 
 run install -d -o root -g root -m 0755 "$(dirname "$ENV_FILE")"
