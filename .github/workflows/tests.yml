@@ -1,0 +1,18 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: ShellCheck (warning 이상 0건)
+        run: shellcheck -S warning bin/*.sh setup/*.sh verify/*.sh tests/*.sh
+      - name: Script tests (monitor / report / log-retention)
+        run: bash tests/run-tests.sh
+      - name: Setup dry-run (변경 없이 명령만 출력)
+        run: DRY_RUN=1 bash setup/03-accounts.sh && DRY_RUN=1 bash setup/04-directories.sh && DRY_RUN=1 bash setup/06-install-monitor.sh
