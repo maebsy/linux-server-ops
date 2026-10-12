@@ -1,0 +1,10 @@
+# --- agent-app monitoring (setup/07-cron.sh 가 관리) ---
+# cron 은 로그인 셸이 아니어서 PATH 가 짧고 /etc/profile.d 를 읽지 않는다 → 필요한 값을 직접 지정
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+AGENT_ENV_FILE=/etc/agent-app/agent-app.env
+# 매분 관제. 경고·오류만 cron.log 에 남긴다 (정상 기록은 monitor.log)
+* * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+# [보너스 2] 매일 03:17 오래된 로그 압축·아카이브·삭제
+17 3 * * * /home/agent-admin/agent-app/bin/log-retention.sh >> /var/log/agent-app/retention.log 2>&1
+# --- end agent-app monitoring ---
