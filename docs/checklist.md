@@ -2,7 +2,7 @@
 
 미션 체크리스트의 모든 항목에 대해 **충족 근거(설정·스크립트·증빙)** 와 **설명 답변**을 정리했습니다.
 
-> 표기: 📂 파일 위치 · 🧪 자동 테스트(`bash tests/run-tests.sh`) · ▶️ 확인 명령 · 📄 증빙(`docs/evidence/`, `sudo bash verify/collect-evidence.sh` 로 생성)
+> 표기: 📂 파일 위치 · 🧪 자동 테스트(`bash tests/run-tests.sh`) · ▶️ 확인 명령 · 📄 증빙([`docs/evidence/`](evidence/README.md) — Ubuntu 22.04 컨테이너에서 실제 수행, 2026-10-21)
 
 - [항목 1. 기능 동작](#항목-1-기능-동작)
 - [항목 2. 구현 방식](#항목-2-구현-방식)
@@ -15,13 +15,13 @@
 
 ### 1-1. SSH 포트가 20022 로 바뀌었고 Root 원격 접속이 차단되는가 ✅
 
-- 📂 `config/sshd_config.d/00-agent-hardening.conf`, `setup/01-ssh.sh` · 📄 `01-ssh.txt`
+- 📂 `config/sshd_config.d/00-agent-hardening.conf`, `setup/01-ssh.sh` · 📄 `01-ssh.txt`, `13-remote-check.txt`(다른 호스트에서 agent-admin 접속 성공, root 는 키가 있어도 거부, 22 응답 없음)
 - ▶️ `sudo sshd -T | grep -Ei '^(port|permitrootlogin) '` → `port 20022`, `permitrootlogin no` / `ss -tulnp | grep sshd` → `0.0.0.0:20022`
 - 설정 파일을 직접 보는 대신 **`sshd -T`(모든 설정 조각을 합친 최종 값)** 로 확인합니다. 다른 조각 파일이 같은 키를 덮어쓰는 경우까지 걸러내기 위해서입니다.
 
 ### 1-2. 방화벽이 활성화되어 있고 20022/tcp 와 15034/tcp 만 허용되는가 ✅ (UFW)
 
-- 📂 `setup/02-firewall.sh` · 📄 `02-firewall.txt`
+- 📂 `setup/02-firewall.sh` · 📄 `02-firewall.txt`, `13-remote-check.txt`(바깥에서 20022 · 15034 만 open, LISTEN 중인 8080 도 DROP)
 - ▶️ `sudo ufw status verbose` → `Status: active`, `Default: deny (incoming)`, 허용 규칙은 20022/tcp, 15034/tcp 와 각각의 `(v6)` 뿐
 - `ufw --force reset` 으로 기존 규칙을 지운 뒤 기본 거부 + 허용 목록 2개만 넣었습니다.
 
@@ -32,13 +32,13 @@
 
 ### 1-4. 앱이 Boot Sequence 5단계 [OK] 를 통과하고 "Agent READY" 가 출력되는가 ✅
 
-- 📂 `bin/run-agent.sh` (root 실행 거부, 환경 파일 로드, CPU 에 맞는 바이너리 선택) · 📄 `06-boot.txt` + 화면 캡처
+- 📂 `bin/run-agent.sh` (root 실행 거부, 환경 파일 로드, CPU 에 맞는 바이너리 선택) · 📄 `06-boot.txt`, `06a-boot-foreground.txt`(포그라운드 실행 TTY 기록), `06b-boot-troubleshooting.txt`(명세값 그대로일 때의 실패 재현)
 - 제공 바이너리로 실제 실행해 확인했습니다. 과제 문서의 `AGENT_KEY_PATH=…/t_secret.key` 그대로는 실패해서, Boot 메시지를 근거로 **키 디렉토리 경로 + `secret.key` 링크**로 맞췄습니다 → [`report.md` 5-1](report.md#5-1-명세와-실제-동작의-차이)
 
 ### 1-5. monitor.sh 가 프로세스/포트를 점검하고 비정상이면 exit 1 로 끝나는가 ✅
 
 - 📂 `bin/monitor.sh` (`find_app_pids`, `port_listening`) · 🧪 `프로세스 없음 → 종료 코드 1`, `프로세스는 있는데 포트 없음 → 종료 코드 1`
-- ▶️ 앱을 끄고 `monitor.sh; echo $?` → `Checking process 'agent-app'... [FAIL]`, `1`
+- ▶️ 앱을 끄고 `monitor.sh; echo $?` → `Checking process 'agent-app'... [FAIL]`, `1` · 📄 `14-failure-cases.txt` (실제 서버에서 앱 중지 → exit 1, monitor.log 기록 안 함, cron.log 에 원인)
 
 ### 1-6. /var/log/agent-app/monitor.log 가 지정 포맷으로 누적되는가 ✅
 

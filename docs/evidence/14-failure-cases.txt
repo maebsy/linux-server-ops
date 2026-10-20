@@ -1,0 +1,84 @@
+# 장애 상황에서 monitor.sh 동작 — 방화벽 꺼짐(경고만) / 앱 중지(Health Check 실패, exit 1)
+# 수집: 2026-10-21 00:56:25 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+## ① 방화벽을 잠시 끄면 → [WARNING] 만 남기고 계속 진행 (exit 0, 로그도 기록)
+$ ufw disable
+Firewall stopped and disabled on system startup
+(exit code: 0)
+
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 602)
+Checking port 15034... [OK]
+Checking firewall... [WARN] (inactive)
+
+[RESOURCE MONITORING]
+CPU Usage : 4.5%
+MEM Usage : 35.3%
+DISK Used : 24%
+Process   : PID 602 CPU 35.4% MEM 1.2% RSS 189.4MB Threads 1
+
+[WARNING] Firewall is inactive (/etc/ufw/ufw.conf)
+[WARNING] MEM threshold exceeded (35.3% > 10%)
+
+[INFO] Log appended: /var/log/agent-app/monitor.log
+(exit code: 0)
+
+$ ufw --force enable
+Firewall is active and enabled on system startup
+(exit code: 0)
+
+## ② 앱을 멈추면 → Health Check 실패, exit 1, monitor.log 에 기록하지 않음
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --stop
+[INFO] 종료 신호를 보냈습니다 (PID 600)
+(exit code: 0)
+
+$ wc -l < /var/log/agent-app/monitor.log
+14
+(exit code: 0)
+
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [FAIL]
+[ERROR] 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+(exit code: 1)
+
+$ wc -l < /var/log/agent-app/monitor.log
+14
+(exit code: 0)
+
+## ③ 앱이 멈춘 동안 cron 실행 결과 — 실패 이유가 cron.log 에 남는다
+$ grep CRON /var/log/syslog | grep agent-admin | tail -n 1
+Oct 21 00:57:01 agent-server CRON[3645]: (agent-admin) CMD (/home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1)
+(exit code: 0)
+
+$ tail -n 3 /var/log/agent-app/cron.log
+[WARNING] MEM threshold exceeded (34.4% > 10%)
+[WARNING] MEM threshold exceeded (36.2% > 10%)
+[ERROR] 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+(exit code: 0)
+
+## ④ 앱 재시작 → 다시 정상
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background >/dev/null; sleep 3; sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 3699)
+Checking port 15034... [OK]
+Checking firewall... [OK] (active)
+
+[RESOURCE MONITORING]
+CPU Usage : 7.6%
+MEM Usage : 34.7%
+DISK Used : 24%
+Process   : PID 3699 CPU 41.3% MEM 0.5% RSS 89.2MB Threads 1
+
+[WARNING] MEM threshold exceeded (34.7% > 10%)
+
+[INFO] Log appended: /var/log/agent-app/monitor.log
+(exit code: 0)
+

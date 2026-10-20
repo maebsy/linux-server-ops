@@ -1,0 +1,42 @@
+# 앱 Boot Sequence 5단계 [OK] + Agent READY, 0.0.0.0:15034 LISTEN
+# 수집: 2026-10-21 00:54:09 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+$ head -n 30 /var/log/agent-app/agent-app.out
+>>> Starting Agent Boot Sequence...
+[1/5] Checking User Account               [OK]
+   ... Running as service user 'agent-admin' (uid=1000)
+[2/5] Verifying Environment Variables     [OK]
+   ... All required Envs correct
+[3/5] Checking Required Files             [OK]
+   ... Verified 'secret.key' with correct key string.
+[4/5] Checking Port Availability          [OK]
+   ... Port 15034 is available.
+[5/5] Verifying Log Permission            [OK]
+   ... Log directory is writable: /var/log/agent-app
+------------------------------------------------------------
+All Boot Checks Passed!
+Agent READY
+2026-10-21 00:44:51,273 [INFO] [SafetyGuard] Process priority lowered (nice=10).
+2026-10-21 00:44:51,273 [INFO] Agent listening at port 15034
+2026-10-21 00:44:51,274 [INFO] === Agent Worker Started ===
+2026-10-21 00:44:51,274 [INFO]    > Cycle: 0 -> 256MB/Lv10 -> 0
+2026-10-21 00:44:51,274 [INFO] --- Step Info: Mode=UP, CPU Lv=1, Mem=0MB ---
+2026-10-21 00:44:51,284 [INFO] [Memory] Increasing... (+25 MB) Total: 25 MB
+2026-10-21 00:44:51,284 [INFO] [CPU] Occupy core for 1s (Level 1)
+2026-10-21 00:44:53,290 [INFO] --- Step Info: Mode=UP, CPU Lv=2, Mem=25MB ---
+2026-10-21 00:44:53,319 [INFO] [Memory] Increasing... (+25 MB) Total: 50 MB
+2026-10-21 00:44:53,320 [INFO] [CPU] Occupy core for 2s (Level 2)
+2026-10-21 00:44:56,326 [INFO] --- Step Info: Mode=UP, CPU Lv=3, Mem=50MB ---
+2026-10-21 00:44:56,355 [INFO] [Memory] Increasing... (+25 MB) Total: 75 MB
+2026-10-21 00:44:56,355 [INFO] [CPU] Occupy core for 3s (Level 3)
+2026-10-21 00:45:00,362 [INFO] --- Step Info: Mode=UP, CPU Lv=4, Mem=75MB ---
+2026-10-21 00:45:00,391 [INFO] [Memory] Increasing... (+25 MB) Total: 100 MB
+2026-10-21 00:45:00,391 [INFO] [CPU] Occupy core for 4s (Level 4)
+
+$ ps -eo user,pid,ppid,etime,cmd | grep -E '[a]gent[-_]app'
+agent-a+     600       1       09:19 /home/agent-admin/agent-app/agent-app-linux-x86
+agent-a+     602     600       09:19 /home/agent-admin/agent-app/agent-app-linux-x86
+
+$ ss -tlnp | grep ':15034\b'
+LISTEN 1      1            0.0.0.0:15034      0.0.0.0:*    users:(("agent-app-linux",pid=602,fd=4))
+

@@ -1,0 +1,40 @@
+# [보너스 1] report.sh 요약 리포트
+# 수집: 2026-10-21 00:55:28 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/report.sh --file /var/log/agent-app/monitor.log
+====== STATISTICS REPORT ======
+Period  : 2026-10-21 00:45:02 ~ 2026-10-21 00:55:02
+[CPU]
+  Average : 5.6%
+  Maximum : 9.1% at 2026-10-21 00:48:02
+  Minimum : 3.6% at 2026-10-21 00:55:02
+[Memory]
+  Average : 35.2%
+  Maximum : 36.1% at 2026-10-21 00:49:03
+  Minimum : 34.4% at 2026-10-21 00:55:02
+[Disk]
+  Average : 24.0%
+  Maximum : 24.0% at 2026-10-21 00:45:02
+  Minimum : 24.0% at 2026-10-21 00:45:02
+[Samples]
+  Data Points: 12 samples
+
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/report.sh --file /var/log/agent-app/monitor.log --from '2026-10-21 00:45:02' --to '2026-10-21 00:55:02'
+====== STATISTICS REPORT ======
+Range   : 2026-10-21 00:45:02 ~ 2026-10-21 00:55:02
+Period  : 2026-10-21 00:45:02 ~ 2026-10-21 00:55:02
+[CPU]
+  Average : 5.6%
+  Maximum : 9.1% at 2026-10-21 00:48:02
+  Minimum : 3.6% at 2026-10-21 00:55:02
+[Memory]
+  Average : 35.2%
+  Maximum : 36.1% at 2026-10-21 00:49:03
+  Minimum : 34.4% at 2026-10-21 00:55:02
+[Disk]
+  Average : 24.0%
+  Maximum : 24.0% at 2026-10-21 00:45:02
+  Minimum : 24.0% at 2026-10-21 00:45:02
+[Samples]
+  Data Points: 12 samples
+

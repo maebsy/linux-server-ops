@@ -1,0 +1,42 @@
+# monitor.sh 실행 결과 (agent-admin, 프로세스·포트·리소스·경고)
+# 수집: 2026-10-21 00:54:09 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+$ ls -l /home/agent-admin/agent-app/bin/monitor.sh
+-rwxr-x--- 1 agent-dev agent-core 17917 Oct 21 00:44 /home/agent-admin/agent-app/bin/monitor.sh
+
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --stats; echo "(exit code: $?)"
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 602)
+Checking port 15034... [OK]
+Checking firewall... [OK] (active)
+
+[RESOURCE MONITORING]
+CPU Usage : 5.6%
+MEM Usage : 35.7%
+DISK Used : 24%
+Process   : PID 602 CPU 47.2% MEM 1.7% RSS 264.3MB Threads 1
+
+[WARNING] MEM threshold exceeded (35.7% > 10%)
+
+====== STATISTICS REPORT ======
+Period  : 2026-10-21 00:46:02 ~ 2026-10-21 00:54:11
+[CPU]
+  Average : 5.9%
+  Maximum : 9.1% at 2026-10-21 00:48:02
+  Minimum : 3.8% at 2026-10-21 00:54:02
+[Memory]
+  Average : 35.3%
+  Maximum : 36.1% at 2026-10-21 00:49:03
+  Minimum : 34.6% at 2026-10-21 00:50:02
+[Disk]
+  Average : 24.0%
+  Maximum : 24.0% at 2026-10-21 00:46:02
+  Minimum : 24.0% at 2026-10-21 00:46:02
+[Samples]
+  Data Points: 10 samples
+
+[INFO] Log appended: /var/log/agent-app/monitor.log
+(exit code: 0)
+

@@ -1,0 +1,23 @@
+# monitor.log 누적 기록 (최근 라인)
+# 수집: 2026-10-21 00:54:11 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+$ ls -l /var/log/agent-app/
+total 76
+-rw-rw----+ 1 agent-admin agent-core 27621 Oct 21 00:54 agent-app.out
+-rw-rw----+ 1 agent-admin agent-core     4 Oct 21 00:44 agent-app.pid
+-rw-rw----+ 1 agent-admin agent-core 27950 Oct 21 00:54 agent_app.log
+-rw-rw----+ 1 agent-admin agent-core   470 Oct 21 00:54 cron.log
+-rw-rw----  1 agent-admin agent-core   693 Oct 21 00:54 monitor.log
+
+$ tail -n 10 /var/log/agent-app/monitor.log
+[2026-10-21 00:46:02] PID:602 CPU:7.8% MEM:35.6% DISK_USED:24%
+[2026-10-21 00:47:02] PID:602 CPU:7.8% MEM:35.7% DISK_USED:24%
+[2026-10-21 00:48:02] PID:602 CPU:9.1% MEM:35.4% DISK_USED:24%
+[2026-10-21 00:49:03] PID:602 CPU:4.3% MEM:36.1% DISK_USED:24%
+[2026-10-21 00:50:02] PID:602 CPU:5.5% MEM:34.6% DISK_USED:24%
+[2026-10-21 00:51:02] PID:602 CPU:4.9% MEM:35.1% DISK_USED:24%
+[2026-10-21 00:52:02] PID:602 CPU:4.9% MEM:34.9% DISK_USED:24%
+[2026-10-21 00:53:03] PID:602 CPU:5.5% MEM:35.0% DISK_USED:24%
+[2026-10-21 00:54:02] PID:602 CPU:3.8% MEM:35.4% DISK_USED:24%
+[2026-10-21 00:54:11] PID:602 CPU:5.6% MEM:35.7% DISK_USED:24%
+

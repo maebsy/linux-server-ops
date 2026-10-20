@@ -1,0 +1,213 @@
+# 서버 구성 실행 기록 — sudo bash setup/run-all.sh (03 → 04 → 05 → 06 → 02 → 01 → 07)
+# 수집: 2026-10-21 00:44:20 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS (색상 코드만 제거)
+
+
+========== 03-accounts ==========
+  $ groupadd agent-common
+[ OK ] 그룹 생성: agent-common
+  $ groupadd agent-core
+[ OK ] 그룹 생성: agent-core
+  $ useradd --create-home --shell /bin/bash agent-admin
+[ OK ] 계정 생성: agent-admin
+  $ usermod -aG agent-common,agent-core agent-admin
+  $ useradd --create-home --shell /bin/bash agent-dev
+[ OK ] 계정 생성: agent-dev
+  $ usermod -aG agent-common,agent-core agent-dev
+  $ useradd --create-home --shell /bin/bash agent-test
+[ OK ] 계정 생성: agent-test
+  $ usermod -aG agent-common agent-test
+
+[INFO] 확인
+uid=1000(agent-admin) gid=1002(agent-admin) groups=1002(agent-admin),1000(agent-common),1001(agent-core)
+uid=1001(agent-dev) gid=1003(agent-dev) groups=1003(agent-dev),1000(agent-common),1001(agent-core)
+uid=1002(agent-test) gid=1004(agent-test) groups=1004(agent-test),1000(agent-common)
+[WARN] 비밀번호는 설정하지 않았습니다(잠긴 계정). 필요하면 'sudo passwd <계정>', 전환은 'sudo -iu agent-admin'
+
+========== 04-directories ==========
+[INFO] AGENT_HOME=/home/agent-admin/agent-app
+  $ chmod 750 /home/agent-admin
+  $ setfacl -m g:agent-common:--x /home/agent-admin
+  $ install -d -o agent-admin -g agent-common -m 0750 /home/agent-admin/agent-app
+  $ install -d -o agent-admin -g agent-common -m 2770 /home/agent-admin/agent-app/upload_files
+  $ install -d -o agent-admin -g agent-core -m 2770 /home/agent-admin/agent-app/api_keys
+  $ install -d -o agent-dev -g agent-core -m 2750 /home/agent-admin/agent-app/bin
+  $ install -d -o agent-admin -g agent-core -m 2770 /var/log/agent-app
+  $ install -d -o agent-admin -g agent-core -m 2770 /var/log/monitor/agent-app/archive
+  $ setfacl -m g:agent-common:rwx,o::--- /home/agent-admin/agent-app/upload_files
+  $ setfacl -d -m g:agent-common:rwx,o::--- /home/agent-admin/agent-app/upload_files
+  $ setfacl -m g:agent-core:rwx,o::--- /home/agent-admin/agent-app/api_keys
+  $ setfacl -d -m g:agent-core:rwx,o::--- /home/agent-admin/agent-app/api_keys
+  $ setfacl -m g:agent-core:rwx,o::--- /var/log/agent-app
+  $ setfacl -d -m g:agent-core:rwx,o::--- /var/log/agent-app
+  $ setfacl -m g:agent-core:rwx,o::--- /var/log/monitor/agent-app/archive
+  $ setfacl -d -m g:agent-core:rwx,o::--- /var/log/monitor/agent-app/archive
+  $ chown agent-admin:agent-core /home/agent-admin/agent-app/api_keys/t_secret.key
+  $ chmod 640 /home/agent-admin/agent-app/api_keys/t_secret.key
+  $ ln -sfn t_secret.key /home/agent-admin/agent-app/api_keys/secret.key
+  $ chown -h agent-admin:agent-core /home/agent-admin/agent-app/api_keys/secret.key
+
+[INFO] 확인
+drwxr-x---+ 3 agent-admin agent-admin  4096 Oct 21 00:44 /home/agent-admin
+drwxr-x---  5 agent-admin agent-common 4096 Oct 21 00:44 /home/agent-admin/agent-app
+drwxrws---+ 2 agent-admin agent-core   4096 Oct 21 00:44 /home/agent-admin/agent-app/api_keys
+drwxr-s---  2 agent-dev   agent-core   4096 Oct 21 00:44 /home/agent-admin/agent-app/bin
+drwxrws---+ 2 agent-admin agent-common 4096 Oct 21 00:44 /home/agent-admin/agent-app/upload_files
+drwxrws---+ 2 agent-admin agent-core   4096 Oct 21 00:44 /var/log/agent-app
+drwxrws---+ 2 agent-admin agent-core   4096 Oct 21 00:44 /var/log/monitor/agent-app/archive
+total 4
+lrwxrwxrwx  1 agent-admin agent-core 12 Oct 21 00:44 secret.key -> t_secret.key
+-rw-r-----+ 1 agent-admin agent-core 19 Oct 21 00:44 t_secret.key
+# file: /home/agent-admin/agent-app/upload_files
+# owner: agent-admin
+# group: agent-common
+# flags: -s-
+user::rwx
+group::rwx
+group:agent-common:rwx
+mask::rwx
+other::---
+default:user::rwx
+default:group::rwx
+default:group:agent-common:rwx
+default:mask::rwx
+default:other::---
+
+# file: /home/agent-admin/agent-app/api_keys
+# owner: agent-admin
+# group: agent-core
+# flags: -s-
+user::rwx
+group::rwx
+group:agent-core:rwx
+mask::rwx
+other::---
+default:user::rwx
+default:group::rwx
+default:group:agent-core:rwx
+default:mask::rwx
+default:other::---
+
+# file: /var/log/agent-app
+# owner: agent-admin
+# group: agent-core
+# flags: -s-
+user::rwx
+group::rwx
+group:agent-core:rwx
+mask::rwx
+other::---
+default:user::rwx
+default:group::rwx
+default:group:agent-core:rwx
+default:mask::rwx
+default:other::---
+
+[ OK ] 디렉토리·권한·ACL 설정 완료 (권한 매트릭스는 verify/collect-evidence.sh 의 04 항목에서 계정별로 검증)
+
+========== 05-environment ==========
+  $ install -d -o root -g root -m 0755 /etc/agent-app
+  $ install -o root -g root -m 0644 /srv/linux-server-ops/config/profile.d/agent-app.sh /etc/profile.d/agent-app.sh
+
+[INFO] 확인 (새 로그인 셸 기준)
+AGENT_HOME=/home/agent-admin/agent-app
+AGENT_KEY_PATH=/home/agent-admin/agent-app/api_keys
+AGENT_LOG_DIR=/var/log/agent-app
+AGENT_PORT=15034
+AGENT_UPLOAD_DIR=/home/agent-admin/agent-app/upload_files
+
+========== 06-install-monitor ==========
+  $ install -o agent-dev -g agent-core -m 0750 /srv/linux-server-ops/bin/monitor.sh /home/agent-admin/agent-app/bin/monitor.sh
+  $ install -o agent-dev -g agent-core -m 0750 /srv/linux-server-ops/bin/report.sh /home/agent-admin/agent-app/bin/report.sh
+  $ install -o agent-dev -g agent-core -m 0750 /srv/linux-server-ops/bin/log-retention.sh /home/agent-admin/agent-app/bin/log-retention.sh
+  $ install -o agent-dev -g agent-core -m 0750 /srv/linux-server-ops/bin/run-agent.sh /home/agent-admin/agent-app/bin/run-agent.sh
+  $ install -o agent-admin -g agent-core -m 0660 /dev/null /var/log/agent-app/monitor.log.tmp
+  $ mv /var/log/agent-app/monitor.log.tmp /var/log/agent-app/monitor.log
+  $ rm -f /var/log/agent-app/monitor.log.tmp
+
+[INFO] 확인
+total 40
+-rwxr-x--- 1 agent-dev agent-core  6332 Oct 21 00:44 log-retention.sh
+-rwxr-x--- 1 agent-dev agent-core 17917 Oct 21 00:44 monitor.sh
+-rwxr-x--- 1 agent-dev agent-core  5040 Oct 21 00:44 report.sh
+-rwxr-x--- 1 agent-dev agent-core  2397 Oct 21 00:44 run-agent.sh
+[INFO] 용량 관리: monitor.sh 가 기록 직전에 10MB 이상이면 monitor.log.1~.9 로 순환합니다 (최대 10개).
+[INFO] logrotate 를 쓰고 싶다면 config/logrotate.d/agent-app 참고 (두 방식을 동시에 쓰지 마세요).
+
+========== 02-firewall ==========
+  $ ufw --force reset
+Backing up 'user.rules' to '/etc/ufw/user.rules.20261021_004418'
+Backing up 'before.rules' to '/etc/ufw/before.rules.20261021_004418'
+Backing up 'after.rules' to '/etc/ufw/after.rules.20261021_004418'
+Backing up 'user6.rules' to '/etc/ufw/user6.rules.20261021_004418'
+Backing up 'before6.rules' to '/etc/ufw/before6.rules.20261021_004418'
+Backing up 'after6.rules' to '/etc/ufw/after6.rules.20261021_004418'
+
+  $ ufw default deny incoming
+Default incoming policy changed to 'deny'
+(be sure to update your rules accordingly)
+  $ ufw default allow outgoing
+Default outgoing policy changed to 'allow'
+(be sure to update your rules accordingly)
+  $ ufw allow 20022/tcp comment SSH (sshd Port)
+Rules updated
+Rules updated (v6)
+  $ ufw allow 15034/tcp comment agent-app
+Rules updated
+Rules updated (v6)
+  $ ufw --force enable
+Firewall is active and enabled on system startup
+  $ systemctl enable ufw
+Synchronizing state of ufw.service with SysV service script with /lib/systemd/systemd-sysv-install.
+Executing: /lib/systemd/systemd-sysv-install enable ufw
+
+[INFO] 확인
+Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
+
+To                         Action      From
+--                         ------      ----
+20022/tcp                  ALLOW IN    Anywhere                   # SSH (sshd Port)
+15034/tcp                  ALLOW IN    Anywhere                   # agent-app
+20022/tcp (v6)             ALLOW IN    Anywhere (v6)              # SSH (sshd Port)
+15034/tcp (v6)             ALLOW IN    Anywhere (v6)              # agent-app
+
+
+========== 01-ssh ==========
+  $ install -d -m 0755 /etc/ssh/sshd_config.d
+  $ cp -a -- /etc/ssh/sshd_config /etc/ssh/sshd_config.bak.20261021004420
+  $ sed -i -E s/^([[:space:]]*Port[[:space:]]+)/# disabled by 01-ssh.sh: \1/ /etc/ssh/sshd_config
+  $ install -o root -g root -m 0644 /tmp/00-agent-hardening.conf /etc/ssh/sshd_config.d/00-agent-hardening.conf
+[ OK ] sshd -t 문법 검사 통과
+  $ systemctl restart ssh
+
+[INFO] 확인
+port 20022
+permitrootlogin no
+LISTEN 0      128          0.0.0.0:20022      0.0.0.0:*    users:(("sshd",pid=500,fd=3))           
+LISTEN 0      128             [::]:20022         [::]:*    users:(("sshd",pid=500,fd=4))           
+[WARN] 새 터미널에서 'ssh -p 20022 <계정>@<서버>' 접속을 확인한 뒤 기존 세션을 닫으세요.
+
+========== 07-cron ==========
+  $ systemctl enable --now cron
+Synchronizing state of cron.service with SysV service script with /lib/systemd/systemd-sysv-install.
+Executing: /lib/systemd/systemd-sysv-install enable cron
+
+[INFO] 확인
+# --- agent-app monitoring (setup/07-cron.sh 가 관리) ---
+# cron 은 로그인 셸이 아니어서 PATH 가 짧고 /etc/profile.d 를 읽지 않는다 → 필요한 값을 직접 지정
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+AGENT_ENV_FILE=/etc/agent-app/agent-app.env
+# 매분 관제. 경고·오류만 cron.log 에 남긴다 (정상 기록은 monitor.log)
+* * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+# [보너스 2] 매일 03:17 오래된 로그 압축·아카이브·삭제
+17 3 * * * /home/agent-admin/agent-app/bin/log-retention.sh >> /var/log/agent-app/retention.log 2>&1
+# --- end agent-app monitoring ---
+[INFO] monitor.log 현재 0줄. 1~2분 뒤 'wc -l /var/log/agent-app/monitor.log' 로 증가를 확인하세요.
+[INFO] (앱이 실행 중이어야 기록됩니다: sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background)
+
+다음 단계: agent-app.zip 을 /home/agent-admin/agent-app 에 풀고
+  sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh   # Boot Sequence 확인
+  sudo bash verify/collect-evidence.sh                                                # 증빙 수집

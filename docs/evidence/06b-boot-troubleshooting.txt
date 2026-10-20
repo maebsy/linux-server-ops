@@ -1,0 +1,49 @@
+# Boot 실패 재현과 조치 — 과제 명세값 그대로 실행했을 때 (docs/report.md 5-1)
+# 수집: 2026-10-21 00:46:21 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+## ① 명세대로 AGENT_KEY_PATH 를 파일 경로(…/api_keys/t_secret.key)로 주면
+$ sudo -iu agent-admin env AGENT_KEY_PATH=/home/agent-admin/agent-app/api_keys/t_secret.key timeout 5 /home/agent-admin/agent-app/agent-app-linux-x86
+>>> Starting Agent Boot Sequence...
+[1/5] Checking User Account               [OK]
+   ... Running as service user 'agent-admin' (uid=1000)
+[2/5] Verifying Environment Variables     [FAIL]
+   >>> Key Path Mismatch. Expected: /home/agent-admin/agent-app/api_keys
+[3/5] Checking Required Files             [FAIL]
+   >>> Skipped due to previous critical failure.
+[4/5] Checking Port Availability          [FAIL]
+   >>> Skipped due to previous critical failure.
+[5/5] Verifying Log Permission            [FAIL]
+   >>> Skipped due to previous critical failure.
+--------------------------------------------------
+System Boot Failed. Process Terminated.
+(exit code: 1)
+
+## ② 디렉토리 경로로 고쳤지만 앱이 찾는 secret.key 가 없으면 (심볼릭 링크를 잠시 치운 상태)
+$ sudo -iu agent-admin timeout 5 /home/agent-admin/agent-app/bin/run-agent.sh
+>>> Starting Agent Boot Sequence...
+[1/5] Checking User Account               [OK]
+   ... Running as service user 'agent-admin' (uid=1000)
+[2/5] Verifying Environment Variables     [OK]
+   ... All required Envs correct
+[3/5] Checking Required Files             [FAIL]
+   >>> Missing File: secret.key
+   >>>    (Expected location: /home/agent-admin/agent-app/api_keys/secret.key)
+[4/5] Checking Port Availability          [FAIL]
+   >>> Skipped due to previous critical failure.
+[5/5] Verifying Log Permission            [FAIL]
+   >>> Skipped due to previous critical failure.
+--------------------------------------------------
+System Boot Failed. Process Terminated.
+(exit code: 1)
+
+$ ls -l /home/agent-admin/agent-app/api_keys/
+total 4
+lrwxrwxrwx  1 agent-admin agent-core 12 Oct 21 00:44 secret.key -> t_secret.key
+-rw-r-----+ 1 agent-admin agent-core 19 Oct 21 00:44 t_secret.key
+(exit code: 0)
+
+## ③ root 로 실행하려 하면 run-agent.sh 가 거부 (요구사항: 일반 계정으로 실행)
+$ /home/agent-admin/agent-app/bin/run-agent.sh
+[ERROR] root 로 실행하지 마세요. 예: sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh
+(exit code: 1)
+

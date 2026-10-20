@@ -1,0 +1,12 @@
+# [보너스 2] 로그 보존 정책 (dry-run + 설정)
+# 수집: 2026-10-21 00:55:28 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/log-retention.sh --dry-run
+[2026-10-21 00:55:28] [INFO] 압축 대상 없음 (7일 이상 지난 로그가 없습니다: /var/log/agent-app)
+[2026-10-21 00:55:28] [INFO] 삭제 대상 없음 (30일 이상 지난 아카이브가 없습니다)
+[2026-10-21 00:55:28] (dry-run) [DONE] compressed=0 deleted=0 errors=0
+
+$ ls -ld /var/log/monitor/agent-app/archive; ls -l /var/log/monitor/agent-app/archive
+drwxrws---+ 2 agent-admin agent-core 4096 Oct 21 00:44 /var/log/monitor/agent-app/archive
+total 0
+

@@ -1,0 +1,24 @@
+# 환경변수 AGENT_HOME / PORT / UPLOAD_DIR / KEY_PATH / LOG_DIR
+# 수집: 2026-10-21 00:54:09 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+$ cat /etc/agent-app/agent-app.env
+# agent-app 실행 환경 (setup/05-environment.sh 가 생성)
+AGENT_HOME=/home/agent-admin/agent-app
+AGENT_PORT=15034
+AGENT_UPLOAD_DIR=/home/agent-admin/agent-app/upload_files
+AGENT_KEY_PATH=/home/agent-admin/agent-app/api_keys
+AGENT_LOG_DIR=/var/log/agent-app
+
+$ sudo -iu agent-admin bash -lc 'env | grep ^AGENT_ | sort'
+AGENT_HOME=/home/agent-admin/agent-app
+AGENT_KEY_PATH=/home/agent-admin/agent-app/api_keys
+AGENT_LOG_DIR=/var/log/agent-app
+AGENT_PORT=15034
+AGENT_UPLOAD_DIR=/home/agent-admin/agent-app/upload_files
+
+$ ls -l /home/agent-admin/agent-app/api_keys/ && cat /home/agent-admin/agent-app/api_keys/t_secret.key
+total 4
+lrwxrwxrwx  1 agent-admin agent-core 12 Oct 21 00:44 secret.key -> t_secret.key
+-rw-r-----+ 1 agent-admin agent-core 19 Oct 21 00:44 t_secret.key
+agent_api_key_test
+

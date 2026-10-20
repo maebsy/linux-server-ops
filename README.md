@@ -12,9 +12,10 @@
 
 - **monitor.sh** — 프로세스·포트 Health Check(실패 시 `exit 1`), 방화벽·임계값 경고, CPU/MEM/DISK 를 `/proc` 에서 직접 계산해 고정 포맷으로 기록, 10MB×10개 내장 순환
 - **재현 가능한 서버 구성** — `setup/` 스크립트 7개(멱등, `DRY_RUN=1` 미리 보기, 설정 백업, `sshd -t` 실패 시 자동 복구)
-- **증빙 자동 수집** — `verify/collect-evidence.sh` 가 체크리스트 8개 항목을 `docs/evidence/*.txt` 로 저장, **계정별 실제 접근 테스트** 매트릭스 포함
+- **증빙 자동 수집** — `verify/collect-evidence.sh` 가 체크리스트 8개 항목을 `docs/evidence/*.txt` 로 저장, **계정별 실제 접근 테스트** 매트릭스 포함. `verify/remote-check.sh` 는 다른 PC 에서 포트·SSH 접속을 확인
+- **실제 수행 증빙** — systemd 로 부팅한 Ubuntu 22.04 컨테이너에서 setup → 앱 Boot → cron 누적 → 장애 상황 → 로그 보존까지 실행한 결과 18개 ([`docs/evidence/`](docs/evidence/README.md))
 - **제공 바이너리로 실제 검증** — Boot Sequence 5단계 통과까지 확인하며 발견한 명세와 실제 동작의 차이를 기록
-- **테스트 69개 + ShellCheck 경고 0** — Ubuntu 22.04 / 24.04 에서 통과
+- **테스트 71개 + ShellCheck 경고 0** — Ubuntu 22.04 / 24.04 에서 통과
 
 ## 목차
 
@@ -24,7 +25,7 @@
 - [서버 구성 요약](#서버-구성-요약)
 - [요구사항 구현 매핑](#요구사항-구현-매핑)
 - [선택(보너스) 과제 구현 내역](#선택보너스-과제-구현-내역)
-- [직접 수행해야 하는 부분](#직접-수행해야-하는-부분)
+- [수행 결과 (증빙)](#수행-결과-증빙)
 - [프로젝트 구조](#프로젝트-구조)
 - [테스트](#테스트)
 - [문서](#문서)
@@ -137,15 +138,15 @@ Process   : PID 15491 CPU 19.6% MEM 2.3% RSS 189.4MB Threads 1
 
 | 요구사항 | 구현 | 증빙 |
 | --- | --- | --- |
-| SSH 20022, Root 원격 차단 | `setup/01-ssh.sh`, `config/sshd_config.d/` | `01-ssh.txt` |
-| UFW 활성화, 20022·15034 만 허용 | `setup/02-firewall.sh` | `02-firewall.txt` |
+| SSH 20022, Root 원격 차단 | `setup/01-ssh.sh`, `config/sshd_config.d/` | `01-ssh.txt`, `13-remote-check.txt` |
+| UFW 활성화, 20022·15034 만 허용 | `setup/02-firewall.sh` | `02-firewall.txt`, `13-remote-check.txt` |
 | 계정 3개, 그룹 2개 | `setup/03-accounts.sh` | `03-accounts.txt` |
 | 디렉토리·권한·ACL | `setup/04-directories.sh` | `04-permissions.txt` (접근 매트릭스) |
 | 환경변수, 키 파일 | `setup/05-environment.sh`, `04-directories.sh` | `05-environment.txt` |
-| 일반 계정 실행, Boot 5단계 OK, 0.0.0.0:15034 | `bin/run-agent.sh` | `06-boot.txt` + 캡처 |
+| 일반 계정 실행, Boot 5단계 OK, 0.0.0.0:15034 | `bin/run-agent.sh` | `06-boot.txt`, `06a-boot-foreground.txt` (TTY 기록) |
 | monitor.sh 위치·소유·권한 | `setup/06-install-monitor.sh` | `07-monitor.txt` |
-| Health Check 실패 시 exit 1 | `monitor.sh` | 테스트 |
-| 방화벽 점검·임계값 경고(종료 안 함) | `monitor.sh` | `07-monitor.txt`, 테스트 |
+| Health Check 실패 시 exit 1 | `monitor.sh` | 테스트, `14-failure-cases.txt` |
+| 방화벽 점검·임계값 경고(종료 안 함) | `monitor.sh` | `07-monitor.txt`, `14-failure-cases.txt`, 테스트 |
 | 로그 포맷, 누적 | `monitor.sh` | `08-monitor-log.txt` |
 | 10MB / 10개 유지 | `monitor.sh::rotate_log` | `10-log-capacity.txt` |
 | agent-admin crontab 매분, 1~2분 내 누적 | `setup/07-cron.sh`, `config/crontab.agent-admin` | `09-cron.txt` |
@@ -158,14 +159,22 @@ Process   : PID 15491 CPU 19.6% MEM 2.3% RSS 189.4MB Threads 1
 | **보너스 1 — report.sh 요약 리포트** | CPU/MEM/DISK 평균·최대(시각)·최소(시각), 샘플 수. `--from/--to` 구간 분석, `--last N`, `--include-rotated`(순환 파일까지 시간순), 형식이 다른 줄 제외, 잘못된 입력 검증. monitor.sh 를 터미널에서 실행하면 자동으로 함께 출력 | `11-report.txt`, 테스트 12개 |
 | **보너스 2 — 시간 기반 로그 보존** | `*.log`/`*.log.N` 중 7일 이상 → gzip → 무결성 검사 후 원본 삭제 → `/var/log/monitor/agent-app/archive/` 이동(원본 수정 시각 유지) → 30일 이상 아카이브 삭제. 디렉토리 없음·권한 부족·대상 0개 안전 처리, `--dry-run`, 매일 03:17 cron | `12-retention.txt`, 테스트 13개 |
 
-## 직접 수행해야 하는 부분
+## 수행 결과 (증빙)
 
-제 환경에서는 스크립트·테스트·제공 바이너리 실행까지 검증했지만, 아래는 **실제 서버(VM)에서 root 로 실행해야** 해서 직접 하셔야 합니다.
+systemd 로 부팅한 **Ubuntu 22.04.5 컨테이너**(sshd · UFW · cron 이 실제 서비스로 동작)에 `setup/run-all.sh` 를 실행하고, 제공 바이너리를 agent-admin 으로 띄운 뒤 증빙을 수집했습니다(2026-10-21). 미션 6장이 "컨테이너/VM" 실습 환경을 허용합니다.
 
-1. VM 에서 `sudo bash setup/run-all.sh`
-2. 앱 실행: `sudo -iu agent-admin …/run-agent.sh` → **Boot Sequence 화면 캡처**
-3. `sudo bash verify/collect-evidence.sh` → `docs/evidence/*.txt` 확인 후 커밋
-4. [`docs/report.md`](docs/report.md) 의 수행 환경·일시를 채우고 체크리스트 ☐ → ☑
+| 확인한 것 | 결과 | 증빙 |
+| --- | --- | --- |
+| SSH | `sshd -T` → `port 20022`, `permitrootlogin no` / 바깥에서 agent-admin 접속 성공, root 는 키가 있어도 `Permission denied` | `01`, `13` |
+| 방화벽 | UFW active, 허용 20022 · 15034 만 / 바깥에서 22 · 8080(LISTEN 중) 은 응답 없음(DROP) | `02`, `13` |
+| 계정 · 권한 | 계정별 실제 접근 테스트 6개 항목이 기대값과 모두 일치 | `03`, `04` |
+| 앱 | Boot 5단계 `[OK]` + `Agent READY`, `0.0.0.0:15034` / 명세값 그대로일 때의 실패 2가지도 재현 | `06`, `06a`, `06b` |
+| monitor.sh · cron | 정상 exit 0, 매분 누적(70초 사이 증가), 방화벽 꺼짐 → 경고만, 앱 중지 → exit 1 + 기록 안 함 | `07`, `08`, `09`, `14` |
+| 용량 · 보너스 | 순환 4개 유지 시연, report.sh 12 samples, 오래된 로그 압축 2 · 아카이브 삭제 1 | `10`, `11`, `15` |
+
+전체 목록과 재현 절차(Docker): [`docs/evidence/README.md`](docs/evidence/README.md) · 내역서: [`docs/report.md`](docs/report.md)
+
+> 컨테이너는 호스트 커널을 함께 쓰므로 monitor.sh 의 CPU · MEM · DISK 는 호스트 전체 값입니다. 실제 VM 에서 같은 절차(`sudo bash setup/run-all.sh` → 앱 실행 → `sudo bash verify/collect-evidence.sh`)로 다시 수집할 수 있습니다.
 
 ## 프로젝트 구조
 
@@ -182,16 +191,19 @@ linux-server-ops/
 │   ├── crontab.agent-admin
 │   ├── profile.d/agent-app.sh
 │   └── logrotate.d/agent-app # (대안) logrotate 방식
-├── verify/collect-evidence.sh
+├── verify/
+│   ├── collect-evidence.sh   # 서버 안에서 증빙 수집 → docs/evidence/
+│   ├── remote-check.sh       # 다른 PC 에서 포트 · SSH 접속 확인
+│   └── container/Dockerfile  # 증빙 수집에 쓴 systemd Ubuntu 22.04 환경
 ├── tests/
-│   ├── run-tests.sh          # 69개 항목
+│   ├── run-tests.sh          # 71개 항목 (root 로 실행하면 권한 테스트 1개 생략)
 │   └── fake_agent_app.py     # 테스트용 가짜 앱 (포트 LISTEN)
 └── docs/
     ├── report.md             # 요구사항 수행 내역서 (제출 문서)
     ├── design.md             # 설계 이유
     ├── checklist.md          # 체크리스트 답변서
     ├── verification.md       # 제공 바이너리로 실제 검증한 기록
-    └── evidence/             # collect-evidence.sh 결과
+    └── evidence/             # 실제 수행 증빙 18개 + README(환경 · 재현 방법)
 ```
 
 ## 테스트

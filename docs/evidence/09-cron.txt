@@ -1,0 +1,30 @@
+# agent-admin crontab 매분 등록, 1분 후 로그 증가
+# 수집: 2026-10-21 00:54:11 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+$ crontab -u agent-admin -l
+# --- agent-app monitoring (setup/07-cron.sh 가 관리) ---
+# cron 은 로그인 셸이 아니어서 PATH 가 짧고 /etc/profile.d 를 읽지 않는다 → 필요한 값을 직접 지정
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+AGENT_ENV_FILE=/etc/agent-app/agent-app.env
+# 매분 관제. 경고·오류만 cron.log 에 남긴다 (정상 기록은 monitor.log)
+* * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+# [보너스 2] 매일 03:17 오래된 로그 압축·아카이브·삭제
+17 3 * * * /home/agent-admin/agent-app/bin/log-retention.sh >> /var/log/agent-app/retention.log 2>&1
+# --- end agent-app monitoring ---
+
+$ systemctl is-active cron 2>/dev/null || systemctl is-active crond
+active
+
+## 00:54:11 monitor.log 11줄 → 70초 대기
+## 00:55:21 monitor.log 12줄 (증가: 1줄)
+$ tail -n 3 /var/log/agent-app/monitor.log
+[2026-10-21 00:54:02] PID:602 CPU:3.8% MEM:35.4% DISK_USED:24%
+[2026-10-21 00:54:11] PID:602 CPU:5.6% MEM:35.7% DISK_USED:24%
+[2026-10-21 00:55:02] PID:602 CPU:3.6% MEM:34.4% DISK_USED:24%
+
+$ grep CRON /var/log/syslog 2>/dev/null | grep agent-admin | tail -n 3
+Oct 21 00:53:01 agent-server CRON[1700]: (agent-admin) CMD (/home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1)
+Oct 21 00:54:01 agent-server CRON[1825]: (agent-admin) CMD (/home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1)
+Oct 21 00:55:01 agent-server CRON[2188]: (agent-admin) CMD (/home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1)
+

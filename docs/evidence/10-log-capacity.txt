@@ -1,0 +1,21 @@
+# monitor.log 용량 관리 (10MB / 10개 파일)
+# 수집: 2026-10-21 00:55:21 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+$ grep -nE '^(MAX_LOG_SIZE_BYTES|MAX_LOG_FILES)=' /home/agent-admin/agent-app/bin/monitor.sh
+49:MAX_LOG_SIZE_BYTES="${MAX_LOG_SIZE_BYTES:-10485760}"   # 10MB
+50:MAX_LOG_FILES="${MAX_LOG_FILES:-10}"                   # monitor.log + monitor.log.1 ~ .9
+
+## 시연: 한도를 200바이트·4개로 줄인 임시 로그에 6번 실행 → 파일 수가 4개로 유지되는지
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env MONITOR_LOG=/tmp/tmp.WIToh1Hjfl/monitor.log MAX_LOG_SIZE_BYTES=200 MAX_LOG_FILES=4 bash -c 'for i in 1 2 3 4 5 6; do printf "%0300d" 0 > $MONITOR_LOG; /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet; done'; ls -l /tmp/tmp.WIToh1Hjfl
+[WARNING] MEM threshold exceeded (34.8% > 10%)
+[WARNING] MEM threshold exceeded (34.8% > 10%)
+[WARNING] MEM threshold exceeded (34.8% > 10%)
+[WARNING] MEM threshold exceeded (34.8% > 10%)
+[WARNING] MEM threshold exceeded (35.0% > 10%)
+[WARNING] MEM threshold exceeded (35.1% > 10%)
+total 16
+-rw-rw---- 1 agent-admin agent-admin  63 Oct 21 00:55 monitor.log
+-rw-rw---- 1 agent-admin agent-admin 300 Oct 21 00:55 monitor.log.1
+-rw-rw---- 1 agent-admin agent-admin 300 Oct 21 00:55 monitor.log.2
+-rw-rw---- 1 agent-admin agent-admin 300 Oct 21 00:55 monitor.log.3
+

@@ -1,0 +1,33 @@
+# 앱 포그라운드 실행 화면 — Boot Sequence 5단계 [OK] + Agent READY (터미널 기록)
+# 수집: 2026-10-21 00:44:42 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 방법: sudo -iu agent-admin script -q -c "$AGENT_HOME/bin/run-agent.sh" (실제 TTY 출력 기록, 8초 후 Ctrl+C)
+
+agent-admin@agent-server:~$ /home/agent-admin/agent-app/bin/run-agent.sh
+>>> Starting Agent Boot Sequence...
+[1/5] Checking User Account               [OK]
+   ... Running as service user 'agent-admin' (uid=1000)
+[2/5] Verifying Environment Variables     [OK]
+   ... All required Envs correct
+[3/5] Checking Required Files             [OK]
+   ... Verified 'secret.key' with correct key string.
+[4/5] Checking Port Availability          [OK]
+   ... Port 15034 is available.
+[5/5] Verifying Log Permission            [OK]
+   ... Log directory is writable: /var/log/agent-app
+------------------------------------------------------------
+All Boot Checks Passed!
+Agent READY
+2026-10-21 00:44:32,957 [INFO] [SafetyGuard] Process priority lowered (nice=10).
+2026-10-21 00:44:32,957 [INFO] Agent listening at port 15034
+2026-10-21 00:44:32,957 [INFO] === Agent Worker Started ===
+2026-10-21 00:44:32,957 [INFO]    > Cycle: 0 -> 256MB/Lv10 -> 0
+2026-10-21 00:44:32,958 [INFO] --- Step Info: Mode=UP, CPU Lv=1, Mem=0MB ---
+2026-10-21 00:44:32,968 [INFO] [Memory] Increasing... (+25 MB) Total: 25 MB
+2026-10-21 00:44:32,968 [INFO] [CPU] Occupy core for 1s (Level 1)
+2026-10-21 00:44:34,971 [INFO] --- Step Info: Mode=UP, CPU Lv=2, Mem=25MB ---
+2026-10-21 00:44:35,001 [INFO] [Memory] Increasing... (+25 MB) Total: 50 MB
+2026-10-21 00:44:35,001 [INFO] [CPU] Occupy core for 2s (Level 2)
+2026-10-21 00:44:38,005 [INFO] --- Step Info: Mode=UP, CPU Lv=3, Mem=50MB ---
+2026-10-21 00:44:38,036 [INFO] [Memory] Increasing... (+25 MB) Total: 75 MB
+2026-10-21 00:44:38,036 [INFO] [CPU] Occupy core for 3s (Level 3)
+

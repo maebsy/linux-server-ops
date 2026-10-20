@@ -1,0 +1,25 @@
+# 원격 점검 — 다른 호스트(ops-laptop)에서 서버(agent-server)로 접속해 본 결과
+# 실행: bash verify/remote-check.sh 172.18.0.2 agent-admin --blocked-port 8080
+# 시험 조건: 서버에서 8080 에 python3 http.server 를 띄워 둔 상태(허용 목록 밖 포트), agent-admin 과 root 의 authorized_keys 에 같은 시험용 키 등록
+# 수집: 2026-10-21 00:56:00 KST
+
+## 1. 포트 (기대: 20022·15034 만 open)
+PORT    SERVICE       RESULT
+20022   sshd          open
+15034   agent-app     open
+22      ssh(default)  timeout (응답 없음 — 방화벽 DROP)
+8080    not-allowed   timeout (응답 없음 — 방화벽 DROP)
+
+## 2. SSH 접속
+$ ssh -p 20022 agent-admin@172.18.0.2 'id; hostname'
+uid=1000(agent-admin) gid=1002(agent-admin) groups=1002(agent-admin),1000(agent-common),1001(agent-core)
+agent-server
+(exit code: 0)
+
+$ ssh -p 20022 root@172.18.0.2 'id'     # PermitRootLogin no → 키가 있어도 거부되어야 함
+root@172.18.0.2: Permission denied (publickey,password).
+(exit code: 255)
+
+$ ssh -p 22 agent-admin@172.18.0.2 'id'      # 22 는 닫혀 있어야 함
+ssh: connect to host 172.18.0.2 port 22: Connection timed out
+(exit code: 255)

@@ -1,0 +1,28 @@
+# 방화벽 활성화, 20022/tcp · 15034/tcp 만 허용
+# 수집: 2026-10-21 00:54:09 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+
+$ ufw status verbose
+Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
+
+To                         Action      From
+--                         ------      ----
+20022/tcp                  ALLOW IN    Anywhere                   # SSH (sshd Port)
+15034/tcp                  ALLOW IN    Anywhere                   # agent-app
+20022/tcp (v6)             ALLOW IN    Anywhere (v6)              # SSH (sshd Port)
+15034/tcp (v6)             ALLOW IN    Anywhere (v6)              # agent-app
+
+
+$ ufw status numbered
+Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] 20022/tcp                  ALLOW IN    Anywhere                   # SSH (sshd Port)
+[ 2] 15034/tcp                  ALLOW IN    Anywhere                   # agent-app
+[ 3] 20022/tcp (v6)             ALLOW IN    Anywhere (v6)              # SSH (sshd Port)
+[ 4] 15034/tcp (v6)             ALLOW IN    Anywhere (v6)              # agent-app
+
+

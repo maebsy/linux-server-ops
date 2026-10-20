@@ -1,0 +1,64 @@
+# [보너스 2] 로그 보존 실제 실행 — 날짜를 과거로 맞춘 시연용 파일로 압축·이동·삭제 확인
+# 수집: 2026-10-21 00:57:26 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 시연용 파일: demo-*.log* (agent-admin 이 만들고 touch -d 로 수정 시각만 과거로). 실제 운영 로그는 건드리지 않음
+
+## 준비: 10일 · 8일 · 2일 지난 로그, 40일 · 29일 지난 아카이브
+$ sudo -u agent-admin bash -c "cd /var/log/agent-app && seq 1 2000 > demo-old.log && seq 1 500 > demo-old.log.1 && seq 1 100 > demo-recent.log && touch -d \"10 days ago\" demo-old.log && touch -d \"8 days ago\" demo-old.log.1 && touch -d \"2 days ago\" demo-recent.log"
+(exit code: 0)
+
+$ sudo -u agent-admin bash -c "cd /var/log/monitor/agent-app/archive && echo x | gzip > demo-ancient.log.20260910.gz && echo y | gzip > demo-keep.log.20260922.gz && touch -d \"40 days ago\" demo-ancient.log.20260910.gz && touch -d \"29 days ago\" demo-keep.log.20260922.gz"
+(exit code: 0)
+
+$ ls -l --time-style=+%Y-%m-%d /var/log/agent-app/demo-* /var/log/monitor/agent-app/archive/
+-rw-rw----+ 1 agent-admin agent-core 8893 2026-10-11 /var/log/agent-app/demo-old.log
+-rw-rw----+ 1 agent-admin agent-core 1892 2026-10-13 /var/log/agent-app/demo-old.log.1
+-rw-rw----+ 1 agent-admin agent-core  292 2026-10-19 /var/log/agent-app/demo-recent.log
+
+/var/log/monitor/agent-app/archive/:
+total 8
+-rw-rw----+ 1 agent-admin agent-core 22 2026-09-11 demo-ancient.log.20260910.gz
+-rw-rw----+ 1 agent-admin agent-core 22 2026-09-22 demo-keep.log.20260922.gz
+(exit code: 0)
+
+## 미리 보기 (--dry-run, 아무것도 바꾸지 않음)
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/log-retention.sh --dry-run
+[2026-10-21 00:57:26] (dry-run) [COMPRESS] /var/log/agent-app/demo-old.log.1 → /var/log/monitor/agent-app/archive/demo-old.log.1.20261013.gz
+[2026-10-21 00:57:26] (dry-run) [COMPRESS] /var/log/agent-app/demo-old.log → /var/log/monitor/agent-app/archive/demo-old.log.20261011.gz
+[2026-10-21 00:57:26] (dry-run) [DELETE] /var/log/monitor/agent-app/archive/demo-ancient.log.20260910.gz
+[2026-10-21 00:57:26] (dry-run) [DONE] compressed=2 deleted=1 errors=0
+(exit code: 0)
+
+## 실제 실행 (cron 과 같은 계정)
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/log-retention.sh
+[2026-10-21 00:57:26] [COMPRESS] /var/log/agent-app/demo-old.log.1 → /var/log/monitor/agent-app/archive/demo-old.log.1.20261013.gz
+[2026-10-21 00:57:26] [COMPRESS] /var/log/agent-app/demo-old.log → /var/log/monitor/agent-app/archive/demo-old.log.20261011.gz
+[2026-10-21 00:57:26] [DELETE] /var/log/monitor/agent-app/archive/demo-ancient.log.20260910.gz
+[2026-10-21 00:57:26] [DONE] compressed=2 deleted=1 errors=0
+(exit code: 0)
+
+$ ls -l --time-style=+%Y-%m-%d /var/log/agent-app/ /var/log/monitor/agent-app/archive/
+/var/log/agent-app/:
+total 60
+-rw-rw----+ 1 agent-admin agent-core  2186 2026-10-21 agent-app.out
+-rw-rw----+ 1 agent-admin agent-core     5 2026-10-21 agent-app.pid
+-rw-rw----+ 1 agent-admin agent-core 35870 2026-10-21 agent_app.log
+-rw-rw----+ 1 agent-admin agent-core   654 2026-10-21 cron.log
+-rw-rw----+ 1 agent-admin agent-core   292 2026-10-19 demo-recent.log
+-rw-rw----  1 agent-admin agent-core   946 2026-10-21 monitor.log
+
+/var/log/monitor/agent-app/archive/:
+total 16
+-rw-rw----+ 1 agent-admin agent-core   22 2026-09-22 demo-keep.log.20260922.gz
+-rw-rw----+ 1 agent-admin agent-core  920 2026-10-13 demo-old.log.1.20261013.gz
+-rw-rw----+ 1 agent-admin agent-core 4231 2026-10-11 demo-old.log.20261011.gz
+(exit code: 0)
+
+$ zcat /var/log/monitor/agent-app/archive/demo-old.log.*.gz | wc -l
+2500
+(exit code: 0)
+
+## 정리: 시연용 파일 삭제
+$ rm -f /var/log/agent-app/demo-* /var/log/monitor/agent-app/archive/demo-*; ls /var/log/monitor/agent-app/archive | wc -l
+0
+(exit code: 0)
+

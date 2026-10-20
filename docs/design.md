@@ -139,7 +139,7 @@ cron 은 **로그인 셸이 아닙니다.** `~/.bashrc`, `/etc/profile.d/*` 를 
 
 ## 7. 테스트
 
-`bash tests/run-tests.sh` — root 나 실제 서버 설정 없이 임시 폴더와 가짜 앱으로 69개 항목을 검사합니다. Ubuntu 22.04(VM, `ss` 경로)와 Ubuntu 24.04(컨테이너, `/proc/net/tcp` 경로) 양쪽에서 모두 통과를 확인했습니다.
+`bash tests/run-tests.sh` — root 나 실제 서버 설정 없이 임시 폴더와 가짜 앱으로 71개 항목을 검사합니다(일반 계정 기준. root 로 실행하면 "쓰기 불가" 테스트 1개는 건너뜀). Ubuntu 22.04(VM, `ss` 경로)와 Ubuntu 24.04(컨테이너, `/proc/net/tcp` 경로) 양쪽에서 모두 통과를 확인했습니다.
 
 | 영역 | 확인 내용 |
 | --- | --- |
