@@ -203,7 +203,8 @@ linux-server-ops/
     ├── design.md             # 설계 이유
     ├── checklist.md          # 체크리스트 답변서
     ├── verification.md       # 제공 바이너리로 실제 검증한 기록
-    └── evidence/             # 실제 수행 증빙 18개 + README(환경 · 재현 방법)
+    ├── evidence/             # 실제 수행 증빙 18개 + README(환경 · 재현 방법)
+    └── presentation.html     # 동료 평가 발표 슬라이드
 ```
 
 ## 테스트
@@ -222,3 +223,4 @@ monitor.sh(정상·실패·경고·순환·오류 입력), report.sh(통계·구
 | [`docs/design.md`](docs/design.md) | 보안 설정의 위협 모델, 권한 모델, monitor.sh 내부 구조, 로그·cron 설계 |
 | [`docs/checklist.md`](docs/checklist.md) | 미션 체크리스트 전 항목의 근거와 답변 |
 | [`docs/verification.md`](docs/verification.md) | 제공 바이너리로 Boot·monitor·report 를 실제 실행한 기록 |
+| [`docs/presentation.html`](docs/presentation.html) | 동료 평가 발표 슬라이드 70장 (브라우저로 열기, ← → 넘기기 · N 발표자 노트 · 인쇄하면 PDF) |
