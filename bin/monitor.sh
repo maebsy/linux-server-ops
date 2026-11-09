@@ -6,11 +6,11 @@
 #  실행 계정 : agent-admin (agent-core 그룹이라 r-x 권한으로 실행 가능), cron 매분
 #
 #  처리 순서
-#    1. Health Check (실패 시 exit 1)  : 앱 프로세스 실행 여부 → TCP 포트 LISTEN 여부
+#    1. Health Check (실패 시 exit 1)  : 앱 프로세스 실행 여부 → TCP 포트 LISTEN 여부 (서비스 불가 = 즉시 조치)
 #    2. 상태 점검   (경고만, 계속 진행) : 방화벽(UFW/firewalld) 활성화 여부
 #    3. 자원 수집                      : CPU(%) / 메모리(%) / 루트 파티션 디스크(%)
-#    4. 임계값 경고 (경고만)            : CPU > 20%, MEM > 10%, DISK > 80%
-#    5. 로그 기록                      : [YYYY-MM-DD HH:MM:SS] PID:.. CPU:..% MEM:..% DISK_USED:..%
+#    4. 임계값 경고 (경고만)            : CPU > 20%, MEM > 10%, DISK > 80% (서비스는 동작 중 = 추세 관찰, 순간 급등마다 exit 하면 오탐 장애가 쌓임)
+#    5. 로그 기록                      : [YYYY-MM-DD HH:MM:SS] PID:.. CPU:..% MEM:..% DISK_USED:..%  (시각 = 서버 로컬 TZ, 이 서버는 KST +0900)
 #       - 10MB 를 넘으면 monitor.log → monitor.log.1 … .9 로 순환 (최대 10개 파일 유지)
 #
 #  종료 코드
@@ -43,7 +43,7 @@ APP_PROCESS_LABEL="${APP_PROCESS_LABEL:-agent-app}"
 CPU_WARN="${CPU_WARN:-20}"          # %
 MEM_WARN="${MEM_WARN:-10}"          # %
 DISK_WARN="${DISK_WARN:-80}"        # %
-CPU_SAMPLE_SEC="${CPU_SAMPLE_SEC:-1}"
+CPU_SAMPLE_SEC="${CPU_SAMPLE_SEC:-1}"  # 초. /proc/stat 을 이 간격으로 두 번 읽은 차이 = 그 구간 평균 (1초: 순간값에 가깝고 cron 매분 실행도 짧게). 소수 1자리
 
 MONITOR_LOG="${MONITOR_LOG:-$AGENT_LOG_DIR/monitor.log}"
 MAX_LOG_SIZE_BYTES="${MAX_LOG_SIZE_BYTES:-10485760}"   # 10MB
@@ -139,7 +139,7 @@ find_app_pids() {
     done
 }
 
-# 포트를 LISTEN 중인지: ss 를 쓰고, 없으면 /proc/net/tcp 를 직접 읽는다 (최소 설치 컨테이너 대비)
+# 포트를 LISTEN 중인지: ss(iproute2 — Ubuntu·RHEL 기본 포함)를 쓴다. netstat(net-tools)은 폐기 예정이라 22.04 기본 미설치. ss 도 없으면 /proc/net/tcp 를 직접 읽는다
 port_listening() {
     local port="$1"
     if command -v ss >/dev/null 2>&1; then
@@ -287,7 +287,7 @@ main() {
         exit 2
     fi
 
-    # 같은 순간에 두 번 실행(cron + 수동)되어도 로그 순환이 꼬이지 않도록 잠금
+    # 같은 순간에 두 번 실행(cron + 수동)되어도 로그 순환이 꼬이지 않도록 잠금 (flock: 끝나면 fd 가 닫혀 자동 해제)
     exec 9>>"$AGENT_LOG_DIR/.monitor.lock"
     if command -v flock >/dev/null 2>&1 && ! flock -w 10 9; then
         fail "다른 monitor.sh 가 실행 중입니다 (잠금 대기 10초 초과)"
@@ -304,7 +304,7 @@ main() {
     if [[ ${#pids[@]} -eq 0 ]]; then
         say "Checking process '$APP_PROCESS_LABEL'... [FAIL]"
         fail "앱 프로세스가 실행 중이 아닙니다 (패턴: $APP_PROCESS_REGEX)"
-        exit 1
+        notify CRITICAL "앱 프로세스가 실행 중이 아닙니다 (패턴: $APP_PROCESS_REGEX)"; hint_recovery process; exit 1
     fi
     pid="$(pick_child_pid "${pids[@]}")"
     owner="$(port_owner_pid "$AGENT_PORT" "${pids[@]}" || true)"
@@ -317,7 +317,7 @@ main() {
     if ! port_listening "$AGENT_PORT"; then
         say "Checking port $AGENT_PORT... [FAIL]"
         fail "TCP $AGENT_PORT 포트가 LISTEN 상태가 아닙니다 (프로세스는 PID $pid 로 실행 중)"
-        exit 1
+        notify CRITICAL "TCP $AGENT_PORT 포트가 LISTEN 상태가 아닙니다 (프로세스는 PID $pid 로 실행 중)"; hint_recovery port; exit 1
     fi
     say "Checking port $AGENT_PORT... [OK]"
 
@@ -359,10 +359,10 @@ main() {
     if [[ ${#warnings[@]} -gt 0 ]]; then
         say ""
         local w
-        for w in "${warnings[@]}"; do warn "$w"; done
+        for w in "${warnings[@]}"; do warn "$w"; notify WARNING "$w"; done
     fi
 
-    # 5) 로그 기록 (>> : 기존 내용 뒤에 덧붙임. > 를 쓰면 매분 이전 기록이 지워진다)
+    # 5) 로그 기록 (>> : 기존 내용 뒤에 덧붙임. > 를 쓰면 매분 이전 기록이 지워진다. 동시 실행은 위 flock 이 직렬화)
     rotate_log "$MONITOR_LOG"
     local line
     line="[$(date '+%Y-%m-%d %H:%M:%S')] PID:$pid CPU:${cpu}% MEM:${mem}% DISK_USED:${disk}%"
@@ -383,6 +383,37 @@ main() {
     say ""
     say "[INFO] Log appended: $MONITOR_LOG"
     return 0
+}
+
+# ================================================================= 알림 훅 (선택 기능)
+# 경고·장애 때 "$ALERT_CMD LEVEL MESSAGE" 를 실행한다 (LEVEL = WARNING | CRITICAL).
+#   예) /etc/agent-app/agent-app.env 에 ALERT_CMD=/home/agent-admin/agent-app/bin/alert.sh
+# 선택 기능이라 본문(1~5단계) 흐름과 분리해 여기에 둔다. main 을 부르기 전에 정의되므로 동작은 같다.
+# 실행 파일(x 권한)이 지정됐을 때만 동작하고, 훅이 느리거나 실패해도 관제 결과(종료 코드·로그)는
+# 바뀌지 않도록 timeout 10초와 || true 로 감싼다.
+ALERT_CMD="${ALERT_CMD:-}"
+notify() {
+    local level="$1" msg="$2"
+    [[ -n "$ALERT_CMD" && -x "$ALERT_CMD" ]] || return 0
+    if command -v timeout >/dev/null; then
+        timeout 10 "$ALERT_CMD" "$level" "$msg" >/dev/null 2>&1
+    else
+        "$ALERT_CMD" "$level" "$msg" >/dev/null 2>&1
+    fi || true
+}
+
+# Health Check 실패 시 다음에 볼 곳을 stderr 에 안내한다 (cron 실행이면 cron.log 에 함께 남는다).
+# [HINT] 로 시작해 [ERROR] 줄과 구분된다 (verify/check-cron.sh 는 [HINT] 줄을 건너뛰고 오류를 찾는다).
+hint_recovery() {
+    local out="$AGENT_LOG_DIR/agent-app.out"
+    case "$1" in
+        process)
+            printf '[HINT] 앱 출력·종료 원인: tail -n 30 %s (부트 단계별 실패는 docs/operations.md §12)\n' "$out" >&2
+            printf '[HINT] 재기동: sudo -iu agent-admin %s/bin/run-agent.sh --background\n' "$AGENT_HOME" >&2 ;;
+        port)
+            printf '[HINT] 원인 진단: %s/diagnose-port.sh %s (바인딩 주소·포트 충돌·방화벽 8단계)\n' "$SCRIPT_DIR" "$AGENT_PORT" >&2
+            printf "[HINT] 바인딩 오류 로그: grep -iE 'already in use|permission denied|bind|fail' %s\n" "$out" >&2 ;;
+    esac
 }
 
 main "$@"

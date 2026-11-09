@@ -13,9 +13,11 @@
 - **monitor.sh** — 프로세스·포트 Health Check(실패 시 `exit 1`), 방화벽·임계값 경고, CPU/MEM/DISK 를 `/proc` 에서 직접 계산해 고정 포맷으로 기록, 10MB×10개 내장 순환
 - **재현 가능한 서버 구성** — `setup/` 스크립트 7개(멱등, `DRY_RUN=1` 미리 보기, 설정 백업, `sshd -t` 실패 시 자동 복구)
 - **증빙 자동 수집** — `verify/collect-evidence.sh` 가 체크리스트 8개 항목을 `docs/evidence/*.txt` 로 저장, **계정별 실제 접근 테스트** 매트릭스 포함. `verify/remote-check.sh` 는 다른 PC 에서 포트·SSH 접속을 확인
-- **실제 수행 증빙** — systemd 로 부팅한 Ubuntu 22.04 컨테이너에서 setup → 앱 Boot → cron 누적 → 장애 상황 → 로그 보존까지 실행한 결과 18개 ([`docs/evidence/`](docs/evidence/README.md))
+- **운영 도구** — 포트 미개방 원인 8단계 진단(`bin/diagnose-port.sh`), cron ↔ syslog ↔ monitor.log 연동 점검(`verify/check-cron.sh`), 경고 알림 훅(`ALERT_CMD` → `bin/alert.sh`, syslog · 웹훅), SSH 무차별 대입 자동 차단(`setup/08-fail2ban.sh`, 선택)
+- **실제 수행 증빙** — systemd 로 부팅한 Ubuntu 22.04 컨테이너에서 setup → 앱 Boot → cron 누적 → 장애 상황 → 로그 보존 → 동료 평가 1·2차 보완(firewalld · nginx 전환 · cron 장애 복구 · 무차별 대입 차단 · 계정 정책 · 응답시간 등)까지 실행한 결과 30개 ([`docs/evidence/`](docs/evidence/README.md))
+- **동료 평가 피드백 반영** — 19개 항목의 부족한 점 · 보완을 모두 반영하고 실측으로 확인 ([`docs/feedback-checklist.md`](docs/feedback-checklist.md)), FAIL 이었던 웹서버 전환은 [`docs/webserver-migration.md`](docs/webserver-migration.md)
 - **제공 바이너리로 실제 검증** — Boot Sequence 5단계 통과까지 확인하며 발견한 명세와 실제 동작의 차이를 기록
-- **테스트 71개 + ShellCheck 경고 0** — Ubuntu 22.04 / 24.04 에서 통과
+- **테스트 117개 + ShellCheck 경고 0** — Ubuntu 22.04 / 24.04 에서 통과
 
 ## 목차
 
@@ -59,9 +61,12 @@ sudo bash verify/collect-evidence.sh  # 4) 증빙 수집 → docs/evidence/*.txt
 | 보너스 1 | [`bin/report.sh`](bin/report.sh) | monitor.log 평균·최대·최소·샘플 수, 구간 분석 |
 | 보너스 2 | [`bin/log-retention.sh`](bin/log-retention.sh) | 7일 압축 → 아카이브 이동 → 30일 삭제 |
 | 실행 도우미 | [`bin/run-agent.sh`](bin/run-agent.sh) | 일반 계정 강제, 환경 로드, CPU 별 바이너리 선택, 백그라운드 실행 |
-| 서버 구성 | [`setup/`](setup/) | `01-ssh` `02-firewall` `03-accounts` `04-directories` `05-environment` `06-install-monitor` `07-cron` `run-all` |
-| 설정 원본 | [`config/`](config/) | sshd 설정 조각, crontab, profile.d, (대안) logrotate |
-| 증빙 | [`verify/collect-evidence.sh`](verify/collect-evidence.sh) | 체크리스트 증빙 12개 파일 생성 |
+| 운영 도구 | [`bin/diagnose-port.sh`](bin/diagnose-port.sh) | 프로세스는 있는데 포트가 안 열릴 때 원인 8단계 진단 (바인딩 · 오타 · 충돌 · 권한 · 방화벽) |
+| 운영 도구 | [`bin/alert.sh`](bin/alert.sh) | `ALERT_CMD` 알림 훅 — syslog · 웹훅, 같은 경고는 10분에 1번 |
+| 운영 도구 | [`verify/check-cron.sh`](verify/check-cron.sh) | crontab · cron 서비스 · 실행 권한 · syslog CRON · monitor.log · cron.log · cron 환경(`env -i`) env 로드 7단계 점검과 복구 명령 |
+| 서버 구성 | [`setup/`](setup/) | `01-ssh` `02-firewall` `03-accounts` `04-directories` `05-environment` `06-install-monitor` `07-cron` `08-fail2ban`(선택) `run-all` |
+| 설정 원본 | [`config/`](config/) | sshd 설정 조각, crontab, profile.d, (대안) logrotate, (선택) fail2ban jail, (예시) nginx 관제 env |
+| 증빙 | [`verify/collect-evidence.sh`](verify/collect-evidence.sh) | 체크리스트 증빙 12개 파일 생성 (`ss -tulnp` 전체, check-cron · diagnose-port 결과 포함) |
 
 ## monitor.sh
 
@@ -110,6 +115,7 @@ Process   : PID 15491 CPU 19.6% MEM 2.3% RSS 189.4MB Threads 1
 
 종료 코드: `0` 정상(경고 포함) · `1` Health Check 실패 · `2` 실행 환경 오류.
 모든 값은 환경변수로 바꿀 수 있습니다(`CPU_WARN`, `MEM_WARN`, `DISK_WARN`, `AGENT_PORT`, `MAX_LOG_SIZE_BYTES`, `MAX_LOG_FILES`, `APP_PROCESS_REGEX` …, `monitor.sh --help`).
+`ALERT_CMD=…/bin/alert.sh` 를 주면 경고(WARNING)·Health Check 실패(CRITICAL) 때 알림 훅을 실행합니다(결과에는 영향 없음, [`docs/operations.md` §8](docs/operations.md#8-경고-알림-연동)).
 `MONITOR_LOG_FORMAT=extended` 를 주면 프로세스 RSS·스레드 수를 덧붙여 기록합니다(다음 미션 B4-2 장애 분석에서 재사용).
 방화벽은 `ufw status` → `sudo -n ufw status` → `/etc/ufw/ufw.conf` 순서로 확인합니다(일반 계정인 cron 실행자도 판단 가능). `UFW_USE_STATUS=0` 이면 설정 파일만 봅니다.
 
@@ -171,6 +177,7 @@ systemd 로 부팅한 **Ubuntu 22.04.5 컨테이너**(sshd · UFW · cron 이 �
 | 앱 | Boot 5단계 `[OK]` + `Agent READY`, `0.0.0.0:15034` / 명세값 그대로일 때의 실패 2가지도 재현 | `06`, `06a`, `06b` |
 | monitor.sh · cron | 정상 exit 0, 매분 누적(70초 사이 증가), 방화벽 꺼짐 → 경고만, 앱 중지 → exit 1 + 기록 안 함 | `07`, `08`, `09`, `14` |
 | 용량 · 보너스 | 순환 4개 유지 시연, report.sh 12 samples, 오래된 로그 압축 2 · 아카이브 삭제 1 | `10`, `11`, `15` |
+| 피드백 보완 (2026-11-09) | setup 전후 포트, firewalld 서버, Boot 단계별, exit 1·2, cron 장애 2종 복구, 포트 원인 6가지 진단, fail2ban 차단·해제, nginx 전환·롤백, logrotate, 알림, `>` 실수 | `16` ~ `26` |
 
 전체 목록과 재현 절차(Docker): [`docs/evidence/README.md`](docs/evidence/README.md) · 내역서: [`docs/report.md`](docs/report.md)
 
@@ -184,26 +191,34 @@ linux-server-ops/
 │   ├── monitor.sh            # 관제 스크립트 (설치: $AGENT_HOME/bin, agent-dev:agent-core 750)
 │   ├── report.sh             # [보너스 1] 요약 리포트
 │   ├── log-retention.sh      # [보너스 2] 압축·아카이브·삭제
-│   └── run-agent.sh          # 앱 실행 도우미
+│   ├── run-agent.sh          # 앱 실행 도우미
+│   ├── diagnose-port.sh      # 포트 미개방 원인 8단계 진단
+│   └── alert.sh              # 경고 알림 훅 (ALERT_CMD)
 ├── setup/                    # 서버 구성 자동화 (sudo, 멱등, DRY_RUN=1)
 ├── config/
 │   ├── sshd_config.d/00-agent-hardening.conf
 │   ├── crontab.agent-admin
 │   ├── profile.d/agent-app.sh
-│   └── logrotate.d/agent-app # (대안) logrotate 방식
+│   ├── logrotate.d/agent-app # (대안) logrotate 방식
+│   ├── fail2ban/jail.d/      # (선택) SSH 무차별 대입 자동 차단
+│   └── examples/monitor-nginx.env  # 관제 대상을 nginx 로 바꿀 때의 env
 ├── verify/
 │   ├── collect-evidence.sh   # 서버 안에서 증빙 수집 → docs/evidence/
 │   ├── remote-check.sh       # 다른 PC 에서 포트 · SSH 접속 확인
+│   ├── check-cron.sh         # cron ↔ syslog ↔ monitor.log 연동 점검
 │   └── container/Dockerfile  # 증빙 수집에 쓴 systemd Ubuntu 22.04 환경
 ├── tests/
-│   ├── run-tests.sh          # 71개 항목 (root 로 실행하면 권한 테스트 1개 생략)
+│   ├── run-tests.sh          # 117개 항목 (root 로 실행하면 권한 테스트 2개 생략)
 │   └── fake_agent_app.py     # 테스트용 가짜 앱 (포트 LISTEN)
 └── docs/
     ├── report.md             # 요구사항 수행 내역서 (제출 문서)
     ├── design.md             # 설계 이유
     ├── checklist.md          # 체크리스트 답변서
+    ├── feedback-checklist.md # 동료 평가 피드백 19항목 반영 체크리스트
+    ├── operations.md         # 운영 매뉴얼 (진단 · 복구 · 알림 · 긴급 대응)
+    ├── webserver-migration.md # 관제 대상을 웹서버(nginx)로 바꾸는 가이드 + 실측
     ├── verification.md       # 제공 바이너리로 실제 검증한 기록
-    ├── evidence/             # 실제 수행 증빙 18개 + README(환경 · 재현 방법)
+    ├── evidence/             # 실제 수행 증빙 30개 + README(환경 · 재현 방법)
     └── presentation.html     # 동료 평가 발표 슬라이드
 ```
 
@@ -213,7 +228,7 @@ linux-server-ops/
 bash tests/run-tests.sh      # root 불필요, 임시 폴더와 가짜 앱 사용
 ```
 
-monitor.sh(정상·실패·경고·순환·오류 입력), report.sh(통계·구간·순환 파일), log-retention.sh(7일·30일 경계, 무결성, dry-run, 디렉토리 없음)와 모든 스크립트의 문법·ShellCheck 를 검사합니다. Ubuntu 22.04(`ss` 경로)와 24.04(`/proc/net/tcp` 경로)에서 모두 통과했고, GitHub Actions 가 push 마다 실행합니다.
+monitor.sh(정상·실패·경고·순환·오류 입력·알림 훅), report.sh(통계·구간·순환 파일), log-retention.sh(7일·30일 경계, 무결성, dry-run, 디렉토리 없음), diagnose-port.sh(미개방·루프백·다른 포트·충돌·방화벽 규칙), check-cron.sh(오래된 기록·crontab 누락·cron.log 오류·syslog 형식·cron 환경 env 로드)와 모든 스크립트의 문법·ShellCheck 를 검사합니다. Ubuntu 22.04(`ss` 경로)와 24.04(`/proc/net/tcp` 경로)에서 모두 통과했고, GitHub Actions 가 push 마다 실행합니다.
 
 ## 문서
 
@@ -223,4 +238,7 @@ monitor.sh(정상·실패·경고·순환·오류 입력), report.sh(통계·구
 | [`docs/design.md`](docs/design.md) | 보안 설정의 위협 모델, 권한 모델, monitor.sh 내부 구조, 로그·cron 설계 |
 | [`docs/checklist.md`](docs/checklist.md) | 미션 체크리스트 전 항목의 근거와 답변 |
 | [`docs/verification.md`](docs/verification.md) | 제공 바이너리로 Boot·monitor·report 를 실제 실행한 기록 |
-| [`docs/presentation.html`](docs/presentation.html) | 동료 평가 발표 슬라이드 70장 (브라우저로 열기, ← → 넘기기 · N 발표자 노트 · 인쇄하면 PDF) |
+| [`docs/feedback-checklist.md`](docs/feedback-checklist.md) | **동료 평가 피드백 반영 체크리스트** — 19항목의 부족한 점·보완과 반영 근거, 보완하며 찾은 문제 |
+| [`docs/operations.md`](docs/operations.md) | 운영 매뉴얼 — 환경별 기준, 로그 파싱, 순환 방식 선택, cron·권한·포트 장애 진단과 복구, 알림, 무차별 대입, firewalld, 긴급 대응, Boot 단계 |
+| [`docs/webserver-migration.md`](docs/webserver-migration.md) | 관제 대상을 웹서버(nginx)로 바꿀 때의 체크포인트·절차·롤백, nginx 실측 결과 |
+| [`docs/presentation.html`](docs/presentation.html) | 동료 평가 발표 슬라이드 77장 (65~71쪽 피드백 반영) (브라우저로 열기, ← → 넘기기 · N 발표자 노트 · 인쇄하면 PDF) |

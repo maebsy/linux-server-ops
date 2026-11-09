@@ -1,0 +1,98 @@
+# cron ↔ syslog ↔ monitor.log 연동 점검 — verify/check-cron.sh 정상 · 장애 · 복구
+# 수집: 2026-11-09 19:34:00 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 방법: 실제 서버에서 cron 중지 / monitor.sh 실행 권한 회수 장애를 만들고, 점검 결과의 '→ 복구' 명령으로 되돌린 뒤 다시 점검. 장애 확인은 --max-age 1(분) 로 빠르게
+
+## ① 정상
+$ bash /srv/linux-server-ops/verify/check-cron.sh
+====== CRON CHECK (user agent-admin) ======
+[1/6] crontab 등록 ... [OK] * * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+[2/6] cron 서비스 ... [OK] cron 데몬이 실행 중입니다
+[3/6] 실행 권한 ... [OK] agent-admin: monitor.sh 실행 가능, /var/log/agent-app 쓰기 가능
+[4/6] syslog 의 CRON 실행 기록 ... [OK] 마지막 실행 59초 전 (/var/log/syslog)
+[5/6] monitor.log 갱신 ... [OK] 마지막 기록 58초 전
+[6/6] cron.log 오류 ... [OK] 최근 오류 없음
+
+결론: 정상
+(exit code: 0)
+
+## ② 장애 A — cron 서비스 중지 (2분 대기)
+$ systemctl stop cron; systemctl is-active cron
+inactive
+(exit code: 3)
+
+$ bash /srv/linux-server-ops/verify/check-cron.sh --max-age 1
+====== CRON CHECK (user agent-admin) ======
+[1/6] crontab 등록 ... [OK] * * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+[2/6] cron 서비스 ... [FAIL] cron 데몬이 실행 중이 아닙니다
+      → 복구: sudo systemctl enable --now cron
+[3/6] 실행 권한 ... [OK] agent-admin: monitor.sh 실행 가능, /var/log/agent-app 쓰기 가능
+[4/6] syslog 의 CRON 실행 기록 ... [FAIL] cron 이 최근 1분 동안 실행하지 않음 (마지막 189초 전)
+      → 복구: sudo systemctl status cron; journalctl -u cron -n 20
+[5/6] monitor.log 갱신 ... [FAIL] 최근 1분간 기록이 없습니다 (마지막 188초 전)
+      → cron 은 실행되는데 기록이 없으면 Health Check 실패(exit 1) 또는 권한 오류 — cron.log 확인
+[6/6] cron.log 오류 ... [OK] 최근 오류 없음
+
+결론: 3개 항목 실패
+(exit code: 1)
+
+### 복구 — 점검이 제시한 명령 실행 후 1분 대기
+$ systemctl enable --now cron 2>&1 | tail -n 1; systemctl is-active cron
+Executing: /lib/systemd/systemd-sysv-install enable cron
+active
+(exit code: 0)
+
+$ bash /srv/linux-server-ops/verify/check-cron.sh --max-age 1
+====== CRON CHECK (user agent-admin) ======
+[1/6] crontab 등록 ... [OK] * * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+[2/6] cron 서비스 ... [OK] cron 데몬이 실행 중입니다
+[3/6] 실행 권한 ... [OK] agent-admin: monitor.sh 실행 가능, /var/log/agent-app 쓰기 가능
+[4/6] syslog 의 CRON 실행 기록 ... [OK] 마지막 실행 15초 전 (/var/log/syslog)
+[5/6] monitor.log 갱신 ... [OK] 마지막 기록 14초 전
+[6/6] cron.log 오류 ... [OK] 최근 오류 없음
+
+결론: 정상
+(exit code: 0)
+
+## ③ 장애 B — monitor.sh 실행 권한이 바뀜 (agent-dev 전용 0700 → cron 실행자 agent-admin 은 실행 불가)
+$ chmod 0700 /home/agent-admin/agent-app/bin/monitor.sh && stat -c '%U:%G %a %n' /home/agent-admin/agent-app/bin/monitor.sh
+agent-dev:agent-core 700 /home/agent-admin/agent-app/bin/monitor.sh
+(exit code: 0)
+
+$ bash /srv/linux-server-ops/verify/check-cron.sh --max-age 1
+====== CRON CHECK (user agent-admin) ======
+[1/6] crontab 등록 ... [OK] * * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+[2/6] cron 서비스 ... [OK] cron 데몬이 실행 중입니다
+[3/6] 실행 권한 ... [FAIL] agent-admin: monitor.sh 실행(x) 불가 
+      → 복구: sudo bash setup/06-install-monitor.sh
+      → agent-core 그룹 확인: uid=1000(agent-admin) gid=1002(agent-admin) groups=1002(agent-admin),1000(agent-common),1001(agent-core)
+[4/6] syslog 의 CRON 실행 기록 ... [OK] 마지막 실행 20초 전 (/var/log/syslog)
+[5/6] monitor.log 갱신 ... [FAIL] 최근 1분간 기록이 없습니다 (마지막 139초 전)
+      → cron 은 실행되는데 기록이 없으면 Health Check 실패(exit 1) 또는 권한 오류 — cron.log 확인
+[6/6] cron.log 오류 ... [FAIL] /bin/bash: line 1: /home/agent-admin/agent-app/bin/monitor.sh: Permission denied
+      → 권한 문제입니다 — 3번 실행 권한 복구를 참고하세요
+
+결론: 3개 항목 실패
+(exit code: 1)
+
+$ tail -n 2 /var/log/agent-app/cron.log
+/bin/bash: line 1: /home/agent-admin/agent-app/bin/monitor.sh: Permission denied
+/bin/bash: line 1: /home/agent-admin/agent-app/bin/monitor.sh: Permission denied
+(exit code: 0)
+
+### 복구 — setup/06-install-monitor.sh 재실행(멱등) 후 1분 대기
+$ cd /srv/linux-server-ops && bash setup/06-install-monitor.sh >/dev/null 2>&1; stat -c '%U:%G %a %n' /home/agent-admin/agent-app/bin/monitor.sh
+agent-dev:agent-core 750 /home/agent-admin/agent-app/bin/monitor.sh
+(exit code: 0)
+
+$ bash /srv/linux-server-ops/verify/check-cron.sh --max-age 1
+====== CRON CHECK (user agent-admin) ======
+[1/6] crontab 등록 ... [OK] * * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+[2/6] cron 서비스 ... [OK] cron 데몬이 실행 중입니다
+[3/6] 실행 권한 ... [OK] agent-admin: monitor.sh 실행 가능, /var/log/agent-app 쓰기 가능
+[4/6] syslog 의 CRON 실행 기록 ... [OK] 마지막 실행 25초 전 (/var/log/syslog)
+[5/6] monitor.log 갱신 ... [OK] 마지막 기록 24초 전
+[6/6] cron.log 오류 ... [WARN] 최근 20줄에 과거 오류 2건 (마지막 줄은 정상)
+
+결론: 정상
+(exit code: 0)
+

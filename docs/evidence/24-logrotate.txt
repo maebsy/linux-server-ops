@@ -1,0 +1,89 @@
+# (대안) logrotate 방식 검증 — 설정 문법, su 지시어가 필요한 이유, 실제 순환, 동시 사용 점검
+# 수집: 2026-11-09 19:10:22 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 방법: 저장소의 config/logrotate.d/agent-app 을 그대로 검사하고, 순환 동작은 같은 설정을 size 1k 로 줄인 시연용 사본으로 확인 (실제 monitor.log 는 건드리지 않음)
+
+## ① 설정 본문
+$ cat /srv/linux-server-ops/config/logrotate.d/agent-app
+# (대안) logrotate 로 monitor.log 용량 관리 — 기본은 monitor.sh 의 내장 순환을 사용한다.
+# 이 방식을 쓰려면: sudo cp config/logrotate.d/agent-app /etc/logrotate.d/agent-app
+#                  그리고 /etc/agent-app/agent-app.env 에 MAX_LOG_SIZE_BYTES=999999999999 (내장 순환 끄기)
+# logrotate 는 보통 하루 1번(logrotate.timer) 실행되므로, 10MB 를 빨리 넘는 환경이면
+# /etc/cron.hourly 나 timer 로 더 자주 실행해야 'size' 조건이 제때 확인된다.
+/var/log/agent-app/monitor.log {
+    size 10M
+    rotate 9
+    missingok
+    notifempty
+    nocompress
+    create 0660 agent-admin agent-core
+    su agent-admin agent-core
+}
+(exit code: 0)
+
+## ② 설치 권한 확인 — 저장소에서 꺼낸 파일(0664)을 그대로 쓰면 logrotate 가 무시한다
+$ stat -c '%a %U:%G %n' /srv/linux-server-ops/config/logrotate.d/agent-app; logrotate -d /srv/linux-server-ops/config/logrotate.d/agent-app 2>&1 | grep -E 'error|Handling'
+664 root:root /srv/linux-server-ops/config/logrotate.d/agent-app
+error: Ignoring /srv/linux-server-ops/config/logrotate.d/agent-app because it is writable by group or others.
+Handling 0 logs
+(exit code: 0)
+
+## ③ install -m 0644 -o root 로 설치한 사본으로 문법 · 동작 미리 보기 (-d: 아무것도 바꾸지 않음)
+$ install -m 0644 -o root -g root /srv/linux-server-ops/config/logrotate.d/agent-app /tmp/lr-check/agent-app && logrotate -d /tmp/lr-check/agent-app 2>&1 | sed -n '/^Handling/,$p'
+Handling 1 logs
+
+rotating pattern: /var/log/agent-app/monitor.log  10485760 bytes (9 rotations)
+empty log files are not rotated, old logs are removed
+switching euid from 0 to 1000 and egid from 0 to 1001 (pid 3623)
+considering log /var/log/agent-app/monitor.log
+Creating new state
+  Now: 2026-11-09 19:10
+  Last rotated at 2026-11-09 19:00
+  log does not need rotating (log size is below the 'size' threshold)
+switching euid from 1000 to 0 and egid from 1001 to 0 (pid 3623)
+(exit code: 0)
+
+## ④ su 지시어가 없으면 — 로그 디렉토리가 그룹 쓰기 가능(agent-core)이라 logrotate 가 거부
+$ cat /tmp/lr-nosu.conf
+/var/log/agent-app/lr-demo.log {
+    size 1k
+    rotate 9
+    missingok
+    notifempty
+    nocompress
+    create 0660 agent-admin agent-core
+}
+(exit code: 0)
+
+$ logrotate -v -s /tmp/lr.state /tmp/lr-nosu.conf 2>&1 | tail -n 4
+empty log files are not rotated, old logs are removed
+considering log /var/log/agent-app/lr-demo.log
+error: skipping "/var/log/agent-app/lr-demo.log" because parent directory has insecure permissions (It's world writable or writable by group which is not "root") Set "su" directive in config file to tell logrotate which user/group should be used for rotation.
+Creating new state
+(exit code: 0)
+
+## ⑤ su agent-admin agent-core 를 넣으면 — 실제로 순환 (size 1k 로 줄인 시연용 사본)
+$ cat /tmp/lr-demo.conf
+/var/log/agent-app/lr-demo.log {
+    size 1k
+    rotate 9
+    missingok
+    notifempty
+    nocompress
+    create 0660 agent-admin agent-core
+    su agent-admin agent-core
+}
+(exit code: 0)
+
+$ for i in 1 2 3; do sudo -u agent-admin bash -c "head -c 3000 /dev/zero | tr '\\0' x >> /var/log/agent-app/lr-demo.log"; logrotate -s /tmp/lr.state /tmp/lr-demo.conf; done; ls -l /var/log/agent-app/lr-demo.log*
+-rw-rw----+ 1 agent-admin agent-core    0 Nov  9 19:10 /var/log/agent-app/lr-demo.log
+-rw-rw----+ 1 agent-admin agent-core 3000 Nov  9 19:10 /var/log/agent-app/lr-demo.log.1
+-rw-rw----+ 1 agent-admin agent-core 3000 Nov  9 19:10 /var/log/agent-app/lr-demo.log.2
+-rw-rw----+ 1 agent-admin agent-core 6000 Nov  9 19:10 /var/log/agent-app/lr-demo.log.3
+(exit code: 0)
+
+## ⑥ 두 방식을 함께 켜지 않았는지 점검 — 기본은 내장 순환(MAX_LOG_SIZE_BYTES), logrotate 설정 파일은 설치하지 않음
+$ ls -l /etc/logrotate.d/agent-app 2>&1; grep -E '^MAX_LOG_SIZE_BYTES' /etc/agent-app/agent-app.env || echo 'MAX_LOG_SIZE_BYTES 미지정 → monitor.sh 기본값 10485760 (내장 순환 사용)'
+ls: cannot access '/etc/logrotate.d/agent-app': No such file or directory
+MAX_LOG_SIZE_BYTES 미지정 → monitor.sh 기본값 10485760 (내장 순환 사용)
+(exit code: 0)
+

@@ -1,0 +1,118 @@
+# firewalld 환경 적용 — setup/02-firewall-firewalld.sh (UFW 대신 firewalld 를 쓰는 서버)
+# 수집: 2026-11-09 19:21:44 KST · 호스트: fw-server · Ubuntu 22.04.5 LTS
+# 방법: 같은 Ubuntu 22.04 이미지로 띄운 별도 컨테이너 fw-server 에서 ufw 를 제거하고 firewalld 를 설치한 뒤 스크립트 실행. 바깥 확인은 같은 네트워크의 ops-laptop
+
+## ① 적용 전 — firewalld 설치만 된 상태 (UFW 와 동시 사용 금지라 ufw 는 제거)
+$ command -v ufw || echo 'ufw 없음'; systemctl is-active firewalld; firewall-cmd --state
+ufw 없음
+inactive
+not running
+(exit code: 252)
+
+## ② setup/02-firewall-firewalld.sh 실행 (기본 zone 의 기존 서비스 제거 → 20022 · 15034 만 허용)
+$ cd /srv/linux-server-ops && bash setup/02-firewall-firewalld.sh
+  $ systemctl enable --now firewalld
+  $ firewall-cmd --permanent --zone=public --remove-service=dhcpv6-client
+success
+  $ firewall-cmd --permanent --zone=public --remove-service=ssh
+success
+  $ firewall-cmd --permanent --zone=public --add-port=20022/tcp
+success
+  $ firewall-cmd --permanent --zone=public --add-port=15034/tcp
+success
+  $ firewall-cmd --reload
+success
+
+[INFO] 확인
+public
+  target: default
+  icmp-block-inversion: no
+  interfaces: 
+  sources: 
+  services: 
+  ports: 20022/tcp 15034/tcp
+  protocols: 
+  forward: yes
+  masquerade: no
+  forward-ports: 
+  source-ports: 
+  icmp-blocks: 
+  rich rules: 
+(exit code: 0)
+
+## ③ 확인 — 런타임과 영구(permanent) 설정이 같은지 (--reload 로 영구 설정을 런타임에 반영)
+$ firewall-cmd --state; systemctl is-enabled firewalld
+running
+enabled
+(exit code: 0)
+
+$ firewall-cmd --get-default-zone; firewall-cmd --get-active-zones
+public
+(exit code: 0)
+
+$ firewall-cmd --list-ports; firewall-cmd --permanent --list-ports
+15034/tcp 20022/tcp
+15034/tcp 20022/tcp
+(exit code: 0)
+
+$ firewall-cmd --list-services; firewall-cmd --permanent --list-services
+
+
+(exit code: 0)
+
+## ④ SSH 포트 변경도 적용 (01-ssh.sh) — 방화벽에 20022 가 열린 뒤에 변경
+$ cd /srv/linux-server-ops && bash setup/01-ssh.sh 2>&1 | tail -n 4; ss -Hltn | grep -E ':(22|20022)\b'
+permitrootlogin no
+LISTEN 0      128          0.0.0.0:20022      0.0.0.0:*    users:(("sshd",pid=1299,fd=3))          
+LISTEN 0      128             [::]:20022         [::]:*    users:(("sshd",pid=1299,fd=4))          
+[WARN] 새 터미널에서 'ssh -p 20022 <계정>@<서버>' 접속을 확인한 뒤 기존 세션을 닫으세요.
+LISTEN 0      128          0.0.0.0:20022 0.0.0.0:*
+LISTEN 0      128             [::]:20022    [::]:*
+(exit code: 0)
+
+## ⑤ 바깥(ops-laptop)에서 접속 확인 — 서버에는 20022(sshd) · 15034(가짜 앱) · 8080(http.server) 가 모두 LISTEN 중
+$ (fw-server) ss -Hltn | grep -E ":(22|20022|15034|8080)\b"
+LISTEN 1      5            0.0.0.0:15034 0.0.0.0:*
+LISTEN 0      5            0.0.0.0:8080  0.0.0.0:*
+LISTEN 0      128          0.0.0.0:20022 0.0.0.0:*
+LISTEN 0      128             [::]:20022    [::]:*
+
+$ (ops-laptop) for p in 22 20022 15034 8080; do timeout 3 bash -c "</dev/tcp/fw-server/$p" && echo "$p open"; done
+22 실패: No route to host
+20022 open
+15034 open
+8080 실패: No route to host
+
+→ 허용한 20022 · 15034 만 열립니다. 8080 은 서버에서 LISTEN 중인데도 "No route to host" — firewalld 기본 zone(public)은 허용 안 된 패킷을 ICMP host-prohibited 로 거부(REJECT)합니다(UFW 기본은 DROP 이라 응답 없이 timeout). 22 도 허용 목록에 없어 같은 방식으로 거부됩니다(sshd 도 이제 20022 만 듣습니다).
+
+## ⑥ monitor.sh 의 방화벽 점검 — FIREWALL=firewalld (systemctl is-active firewalld)
+$ env AGENT_ENV_FILE=/dev/null AGENT_LOG_DIR=/tmp/fwlog FIREWALL=firewalld MEM_WARN=100 bash /srv/linux-server-ops/bin/monitor.sh --no-stats | sed -n '3,6p'
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 1313)
+Checking port 15034... [OK]
+Checking firewall... [OK] (active)
+(exit code: 0)
+
+$ env AGENT_ENV_FILE=/dev/null FIREWALL=firewalld bash /srv/linux-server-ops/bin/diagnose-port.sh 15034 | sed -n '1p;9,$p'
+====== PORT DIAGNOSIS (port 15034) ======
+[7/8] 프로세스 상태 ... [OK] State=S Threads=1 (정상)
+[8/8] 방화벽 허용 규칙 ... [OK] firewalld 가 15034/tcp 를 허용
+결론: 로컬 LISTEN 정상, 확인 필요 1건 — [5/8] 앱 환경에 AGENT_PORT 가 없음
+(exit code: 0)
+
+$ firewall-cmd --query-port=15034/tcp; firewall-cmd --query-port=8080/tcp
+yes
+no
+(exit code: 1)
+
+## ⑦ firewalld 를 멈추면 → monitor.sh 는 경고만 (exit 0)
+$ systemctl stop firewalld; env AGENT_ENV_FILE=/dev/null AGENT_LOG_DIR=/tmp/fwlog FIREWALL=firewalld MEM_WARN=100 bash /srv/linux-server-ops/bin/monitor.sh --no-stats | grep -E 'firewall|Firewall'
+Checking firewall... [WARN] (inactive)
+[WARNING] Firewall is inactive (systemctl is-active firewalld)
+(exit code: 0)
+
+$ systemctl start firewalld; firewall-cmd --state; firewall-cmd --list-ports
+running
+15034/tcp 20022/tcp
+(exit code: 0)
+

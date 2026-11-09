@@ -1,0 +1,115 @@
+# SSH 무차별 대입 자동 차단 — setup/08-fail2ban.sh (선택 단계)
+# 수집: 2026-11-09 19:52:13 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 참고: 첫 시도(19:40)에서는 jail 설정의 값 뒤에 # 주석을 붙였다가 fail2ban 이 주석까지 값으로 읽어 sshd jail 이 뜨지 않았다(maxretry 무효, banaction 이 "ufw # …"). 주석을 별도 줄로 옮기고 08-fail2ban.sh 가 fail2ban-client -t 검사 후에만 재시작하도록 고친 뒤, 첫 시도의 실패 기록이 findtime(10분) 밖으로 나간 19:52 에 다시 수집했다. ④ 의 auth.log 집계 12건 = 첫 시도 6건 + 이번 6건.
+# 방법: 서버에 jail 을 설치하고, 같은 네트워크의 ops-laptop 에서 존재하지 않는 계정으로 SSH 접속을 반복해 차단 → 확인 → 해제
+
+## ① 설치 — setup/08-fail2ban.sh
+$ cd /srv/linux-server-ops && bash setup/08-fail2ban.sh
+  $ install -o root -g root -m 0644 /srv/linux-server-ops/config/fail2ban/jail.d/agent-sshd.local /etc/fail2ban/jail.d/agent-sshd.local
+  $ systemctl enable fail2ban
+Synchronizing state of fail2ban.service with SysV service script with /lib/systemd/systemd-sysv-install.
+Executing: /lib/systemd/systemd-sysv-install enable fail2ban
+  $ systemctl restart fail2ban
+
+[INFO] 확인
+Status for the jail: sshd
+|- Filter
+|  |- Currently failed:	0
+|  |- Total failed:	0
+|  `- File list:	/var/log/auth.log
+`- Actions
+   |- Currently banned:	0
+   |- Total banned:	0
+   `- Banned IP list:	
+[ OK ] fail2ban sshd jail 이 활성화되었습니다
+
+[INFO] 차단 목록 확인:  sudo fail2ban-client status sshd
+[INFO] 방화벽에서도 확인:  sudo ufw status
+[INFO] 오탐 수동 해제:  sudo fail2ban-client set sshd unbanip <IP>
+(exit code: 0)
+
+## ② 적용된 값 확인 — 설정 파일의 주석이 값에 섞이지 않았는지 fail2ban 이 읽은 값으로 확인
+$ for k in maxretry findtime bantime; do printf '%-9s %s\n' $k "$(fail2ban-client get sshd $k)"; done; fail2ban-client get sshd actions
+maxretry  5
+findtime  600
+bantime   3600
+The jail sshd has the following actions:
+ufw
+(exit code: 0)
+
+$ fail2ban-client status sshd
+Status for the jail: sshd
+|- Filter
+|  |- Currently failed:	0
+|  |- Total failed:	0
+|  `- File list:	/var/log/auth.log
+`- Actions
+   |- Currently banned:	0
+   |- Total banned:	0
+   `- Banned IP list:	
+(exit code: 0)
+
+## ③ 공격 흉내 — 다른 호스트(ops-laptop)에서 존재하지 않는 계정으로 6번 접속 시도
+$ (ops-laptop) timeout 3 bash -c "</dev/tcp/agent-server/20022" && echo open
+20022 open
+
+$ (ops-laptop) for i in 1 2 3 4 5 6; do ssh -p 20022 -o BatchMode=yes -o ConnectTimeout=3 nosuchuser@agent-server true; done
+  [1] nosuchuser@agent-server: Permission denied (publickey,password).
+  [2] nosuchuser@agent-server: Permission denied (publickey,password).
+  [3] nosuchuser@agent-server: Permission denied (publickey,password).
+  [4] nosuchuser@agent-server: Permission denied (publickey,password).
+  [5] nosuchuser@agent-server: Permission denied (publickey,password).
+  [6] nosuchuser@agent-server: Permission denied (publickey,password).
+
+## ④ 서버 쪽 — 로그 기준 탐지 명령(운영 매뉴얼 §9)과 차단 상태
+$ awk '/Failed password|Invalid user/ { for (i = 1; i <= NF; i++) if ($i == "from") print $(i + 1) }' /var/log/auth.log | sort | uniq -c | sort -rn | head
+     12 172.20.0.3
+(exit code: 0)
+
+$ grep 'fail2ban.actions' /var/log/fail2ban.log | tail -n 2
+2026-11-09 19:52:13,937 fail2ban.actions        [12698]: INFO      banTime: 3600
+2026-11-09 19:52:21,148 fail2ban.actions        [12698]: NOTICE  [sshd] Ban 172.20.0.3
+(exit code: 0)
+
+$ fail2ban-client status sshd
+Status for the jail: sshd
+|- Filter
+|  |- Currently failed:	1
+|  |- Total failed:	6
+|  `- File list:	/var/log/auth.log
+`- Actions
+   |- Currently banned:	1
+   |- Total banned:	1
+   `- Banned IP list:	172.20.0.3
+(exit code: 0)
+
+$ ufw status | sed -n '1,8p'
+Status: active
+
+To                         Action      From
+--                         ------      ----
+Anywhere                   REJECT      172.20.0.3                
+20022/tcp                  ALLOW       Anywhere                   # SSH (sshd Port)
+15034/tcp                  ALLOW       Anywhere                   # agent-app
+20022/tcp (v6)             ALLOW       Anywhere (v6)              # SSH (sshd Port)
+(exit code: 0)
+
+## ⑤ 차단 중 — 같은 호스트에서 SSH 포트 접속
+$ (ops-laptop) timeout 3 bash -c "</dev/tcp/agent-server/20022" && echo open
+20022 접속 불가 (exit 1)
+
+## ⑥ 해제 — 관리자가 수동으로 (또는 bantime 1시간 뒤 자동)
+$ fail2ban-client set sshd unbanip 172.20.0.3
+1
+(exit code: 0)
+
+$ fail2ban-client status sshd | grep -E 'Currently banned|Banned IP'; ufw status | grep -c 172.20.0.3 || true
+   |- Currently banned:	0
+   `- Banned IP list:	
+0
+(exit code: 0)
+
+## ⑦ 해제 후 — 다시 접속 가능
+$ (ops-laptop) timeout 3 bash -c "</dev/tcp/agent-server/20022" && echo open
+20022 open
+

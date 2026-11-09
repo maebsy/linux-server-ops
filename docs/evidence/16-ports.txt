@@ -1,0 +1,73 @@
+# setup 전후 포트 비교 — ss -tulnp / ss -tlnp 전체 출력
+# 수집: 2026-11-09 19:06:13 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 방법: 새 컨테이너에서 setup/run-all.sh 실행 전에 ①을 기록하고, 실행 후 앱을 띄운 뒤 ②를 기록
+
+## ① setup 전 — sshd 가 기본 포트 22 로 LISTEN, 방화벽 없음
+$ ss -tulnp
+Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                  
+udp   UNCONN 0      0      127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=46,fd=13))
+udp   UNCONN 0      0         127.0.0.11:34574      0.0.0.0:*                                            
+tcp   LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=46,fd=14))
+tcp   LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=59,fd=3))            
+tcp   LISTEN 0      4096      127.0.0.11:42707      0.0.0.0:*                                            
+tcp   LISTEN 0      128             [::]:22            [::]:*    users:(("sshd",pid=59,fd=4))            
+(exit code: 0)
+
+$ sshd -T 2>/dev/null | grep -Ei "^(port|permitrootlogin) "
+port 22
+permitrootlogin without-password
+(exit code: 0)
+
+$ ufw status
+Status: inactive
+(exit code: 0)
+
+## ② setup + 앱 실행 후 — sshd 는 20022 로만, 앱은 0.0.0.0:15034, 22 는 더 이상 LISTEN 하지 않음
+# (수집 2026-11-09 19:07:54 KST)
+$ ss -tulnp
+Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                  
+udp   UNCONN 0      0      127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=46,fd=13))
+udp   UNCONN 0      0         127.0.0.11:34574      0.0.0.0:*                                            
+tcp   LISTEN 0      128          0.0.0.0:20022      0.0.0.0:*    users:(("sshd",pid=503,fd=3))           
+tcp   LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=46,fd=14))
+tcp   LISTEN 0      4096      127.0.0.11:42707      0.0.0.0:*                                            
+tcp   LISTEN 0      1            0.0.0.0:15034      0.0.0.0:*    users:(("agent-app-linux",pid=912,fd=4))
+tcp   LISTEN 0      128             [::]:20022         [::]:*    users:(("sshd",pid=503,fd=4))           
+(exit code: 0)
+
+$ ss -tlnp
+State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                  
+LISTEN 0      128          0.0.0.0:20022      0.0.0.0:*    users:(("sshd",pid=503,fd=3))           
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=46,fd=14))
+LISTEN 0      4096      127.0.0.11:42707      0.0.0.0:*                                            
+LISTEN 0      1            0.0.0.0:15034      0.0.0.0:*    users:(("agent-app-linux",pid=912,fd=4))
+LISTEN 0      128             [::]:20022         [::]:*    users:(("sshd",pid=503,fd=4))           
+(exit code: 0)
+
+$ sshd -T 2>/dev/null | grep -Ei "^(port|permitrootlogin) "
+port 20022
+permitrootlogin no
+(exit code: 0)
+
+$ ufw status verbose
+Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
+
+To                         Action      From
+--                         ------      ----
+20022/tcp                  ALLOW IN    Anywhere                   # SSH (sshd Port)
+15034/tcp                  ALLOW IN    Anywhere                   # agent-app
+20022/tcp (v6)             ALLOW IN    Anywhere (v6)              # SSH (sshd Port)
+15034/tcp (v6)             ALLOW IN    Anywhere (v6)              # agent-app
+
+(exit code: 0)
+
+## ③ 정리
+$ ss -Hltn | awk "{print \$4}" | sed "s/.*://" | sort -un | tr "\n" " "; echo
+53 15034 20022 42707 
+(exit code: 0)
+
+→ 외부 인터페이스(0.0.0.0 / [::])에서 LISTEN 하는 TCP 포트는 20022(sshd)와 15034(agent-app) 뿐입니다. 53 · 42707 은 루프백(127.0.0.53 / 127.0.0.11)에만 열린 컨테이너 내부 DNS(systemd-resolved, Docker 내장 DNS)라 바깥에서 접근할 수 없습니다.
+→ 방화벽 허용 규칙도 같은 두 포트뿐이라, 열린 포트와 허용 규칙이 일치합니다.

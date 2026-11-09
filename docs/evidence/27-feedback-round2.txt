@@ -1,0 +1,242 @@
+# 2차 동료 평가 보완 실측 — 계정 정책 · 타임존 · cron 환경 · 실패 안내 · 잠금 · 도구 선택 · 보안 모듈
+# 수집: 2026-11-09 23:37:56 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 방법: 새 컨테이너에서 setup/run-all.sh 로 구성하고 agent-app 을 띄운 뒤, 평가 항목별로 직접 확인. 항목 번호는 docs/feedback-checklist.md 2차 표와 같음
+
+## ① 계정 잠금 · 비밀번호 정책 (#3) — passwd -S 두 번째 칸: L 잠김 / P 비밀번호 있음 / NP 없음
+$ for u in agent-admin agent-dev agent-test; do passwd -S $u; done
+agent-admin L 11/09/2026 0 99999 7 -1
+agent-dev L 11/09/2026 0 99999 7 -1
+agent-test L 11/09/2026 0 99999 7 -1
+(exit code: 0)
+
+$ chage -l agent-admin
+Last password change					: Nov 09, 2026
+Password expires					: never
+Password inactive					: never
+Account expires						: never
+Minimum number of days between password change		: 0
+Maximum number of days between password change		: 99999
+Number of days of warning before password expires	: 7
+(exit code: 0)
+
+$ grep -E '^(PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_WARN_AGE)' /etc/login.defs
+PASS_MAX_DAYS	99999
+PASS_MIN_DAYS	0
+PASS_WARN_AGE	7
+(exit code: 0)
+
+$ sshd -T 2>/dev/null | grep -Ei '^(passwordauthentication|pubkeyauthentication|permitemptypasswords|permitrootlogin) '
+permitrootlogin no
+pubkeyauthentication yes
+passwordauthentication yes
+permitemptypasswords no
+(exit code: 0)
+
+→ 세 계정 모두 비밀번호 없이 잠김(L): 비밀번호로는 로그인할 수 없고, 관리자가 sudo -iu 로 전환한다. 만료 정책은 기본값(99999일)이라 비밀번호를 쓰게 되면 chage 로 정해야 한다(운영 매뉴얼 §6).
+
+## ② 로그 시각의 타임존 (#6) — monitor.log 의 [YYYY-MM-DD HH:MM:SS] 는 서버 로컬 시각
+$ timedatectl 2>/dev/null | grep 'Time zone' || readlink /etc/localtime
+                Time zone: Asia/Seoul (KST, +0900)
+(exit code: 0)
+
+$ date '+%F %T %Z (%z)'
+2026-11-09 23:37:57 KST (+0900)
+(exit code: 0)
+
+$ tail -n 1 /var/log/agent-app/monitor.log
+[2026-11-09 23:37:05] PID:1930 CPU:9.4% MEM:60.7% DISK_USED:30%
+(exit code: 0)
+
+### 다른 서버(UTC) 로그와 맞춰 볼 때 — 로컬 시각을 UTC 로 변환
+$ ts=$(tail -n 1 /var/log/agent-app/monitor.log | cut -c2-20); echo "KST $ts → UTC $(date -u -d "TZ=\"Asia/Seoul\" $ts" '+%F %T')"
+KST 2026-11-09 23:37:05 → UTC 2026-11-09 14:37:05
+(exit code: 0)
+
+## ③ cron 과 같은 최소 환경(env -i)에서 env 파일 로드 · cron 실행 계정으로 실제 실행 (#7 · #11)
+$ bash /srv/linux-server-ops/verify/check-cron.sh
+====== CRON CHECK (user agent-admin) ======
+[1/7] crontab 등록 ... [OK] * * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+[2/7] cron 서비스 ... [OK] cron 데몬이 실행 중입니다
+[3/7] 실행 권한 ... [OK] agent-admin: monitor.sh 실행 가능, /var/log/agent-app 쓰기 가능
+[4/7] syslog 의 CRON 실행 기록 ... [OK] 마지막 실행 56초 전 (/var/log/syslog)
+[5/7] monitor.log 갱신 ... [OK] 마지막 기록 52초 전
+[6/7] cron.log 오류 ... [OK] 최근 오류 없음
+[7/7] cron 환경의 env 로드 ... [OK] agent-admin(env -i): AGENT_PORT=15034 AGENT_LOG_DIR=/var/log/agent-app ← /etc/agent-app/agent-app.env
+
+결론: 정상
+(exit code: 0)
+
+### cron 실행 계정(agent-admin)으로, cron 처럼 환경을 비우고(env -i) monitor.sh 를 직접 실행
+$ sudo -u agent-admin env -i HOME=/home/agent-admin PATH=/usr/bin:/bin SHELL=/bin/sh /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet; echo "exit=$?"; tail -n 1 /var/log/agent-app/monitor.log
+[WARNING] MEM threshold exceeded (61.1% > 10%)
+exit=0
+[2026-11-09 23:37:58] PID:1930 CPU:8.7% MEM:61.1% DISK_USED:30%
+(exit code: 0)
+
+### 장애 — env 파일을 root 전용(0600)으로 바꾸면 agent-admin 은 못 읽고 monitor.sh 는 오류 없이 기본값으로 돈다
+$ chmod 0600 /etc/agent-app/agent-app.env; stat -c '%U:%G %a %n' /etc/agent-app/agent-app.env
+root:root 600 /etc/agent-app/agent-app.env
+(exit code: 0)
+
+$ set -o pipefail; bash /srv/linux-server-ops/verify/check-cron.sh | sed -n '1p;/\[7\/7\]/,$p'
+====== CRON CHECK (user agent-admin) ======
+[7/7] cron 환경의 env 로드 ... [FAIL] agent-admin 가 /etc/agent-app/agent-app.env 을 읽을 수 없습니다 (기본값으로 조용히 실행됨)
+      → 복구: sudo bash setup/05-environment.sh   # root:root 0644 로 다시 설치
+
+결론: 1개 항목 실패
+(exit code: 1)
+
+### 복구 — 점검이 제시한 명령
+$ cd /srv/linux-server-ops && bash setup/05-environment.sh >/dev/null 2>&1; stat -c '%U:%G %a %n' /etc/agent-app/agent-app.env
+root:root 644 /etc/agent-app/agent-app.env
+(exit code: 0)
+
+$ bash /srv/linux-server-ops/verify/check-cron.sh | grep '\[7/7\]'
+[7/7] cron 환경의 env 로드 ... [OK] agent-admin(env -i): AGENT_PORT=15034 AGENT_LOG_DIR=/var/log/agent-app ← /etc/agent-app/agent-app.env
+(exit code: 0)
+
+## ④ Health Check 실패 시 복구 안내 (#5) — [ERROR] 다음 줄에 [HINT] 로 다음 확인 위치
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --stop >/dev/null 2>&1; sleep 2; sudo -u agent-admin /home/agent-admin/agent-app/bin/monitor.sh --no-stats; echo "exit=$?"
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [FAIL]
+[ERROR] 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+[HINT] 앱 출력·종료 원인: tail -n 30 /var/log/agent-app/agent-app.out (부트 단계별 실패는 docs/operations.md §12)
+[HINT] 재기동: sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background
+exit=1
+(exit code: 0)
+
+### 포트 미개방 — LISTEN 하지 않는 같은 이름의 프로세스(테스트용 가짜 앱)
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/monitor.sh --no-stats; echo "exit=$?"
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 2782)
+Checking port 15034... [FAIL]
+[ERROR] TCP 15034 포트가 LISTEN 상태가 아닙니다 (프로세스는 PID 2782 로 실행 중)
+[HINT] 원인 진단: /home/agent-admin/agent-app/bin/diagnose-port.sh 15034 (바인딩 주소·포트 충돌·방화벽 8단계)
+[HINT] 바인딩 오류 로그: grep -iE 'already in use|permission denied|bind|fail' /var/log/agent-app/agent-app.out
+exit=1
+(exit code: 0)
+
+## ⑤ 포트 바인딩 실패 원인(stderr) 수집 (#18) — 다른 프로세스가 15034 를 먼저 잡은 상태에서 앱 기동
+$ ss -Hltnp 'sport = :15034'
+LISTEN 0      5      0.0.0.0:15034 0.0.0.0:* users:(("python3",pid=2890,fd=3))
+(exit code: 0)
+
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background >/dev/null 2>&1; sleep 3; pgrep -x agent-app-linux >/dev/null && echo '앱 실행 중' || echo '앱 종료됨 (부트 실패)'
+앱 종료됨 (부트 실패)
+(exit code: 0)
+
+### 1) 앱의 stdout/stderr — run-agent.sh --background 는 /var/log/agent-app/agent-app.out 에 모은다
+$ grep -iE 'fail|in use|error' /var/log/agent-app/agent-app.out | tail -n 5
+[4/5] Checking Port Availability          [FAIL]
+   >>> Port 15034 is already in use.
+[5/5] Verifying Log Permission            [FAIL]
+   >>> Skipped due to previous critical failure.
+System Boot Failed. Process Terminated.
+(exit code: 0)
+
+### 2) 그 순간 포트 주인 — 충돌 상대 PID·프로그램
+$ ss -Hltnp 'sport = :15034' | grep -o 'users:.*'
+users:(("python3",pid=2890,fd=3))
+(exit code: 0)
+
+### 3) 같은 환경으로 포그라운드 재실행 — 터미널에 stderr 가 바로 보인다 (6초 후 종료)
+$ sudo -iu agent-admin timeout 6 /home/agent-admin/agent-app/bin/run-agent.sh 2>&1 | grep -E '4/5|in use|Failed' | head -n 3
+[4/5] Checking Port Availability          [FAIL]
+   >>> Port 15034 is already in use.
+System Boot Failed. Process Terminated.
+(exit code: 0)
+
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background >/dev/null 2>&1; sleep 3; ss -Hltn 'sport = :15034'
+LISTEN 0      1      0.0.0.0:15034 0.0.0.0:*
+(exit code: 0)
+
+## ⑥ 동시 실행 안전성 (#16) — 같은 순간 2번 실행, 그리고 잠금을 오래 쥔 경우
+$ n0=$(wc -l < /var/log/agent-app/monitor.log); (sudo -u agent-admin /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet & sudo -u agent-admin /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet & wait); n1=$(wc -l < /var/log/agent-app/monitor.log); echo "추가된 줄: $((n1-n0))"; tail -n 2 /var/log/agent-app/monitor.log
+[WARNING] MEM threshold exceeded (60.0% > 10%)
+[WARNING] MEM threshold exceeded (60.1% > 10%)
+추가된 줄: 2
+[2026-11-09 23:38:16] PID:2941 CPU:9.1% MEM:60.0% DISK_USED:30%
+[2026-11-09 23:38:17] PID:2941 CPU:8.0% MEM:60.1% DISK_USED:30%
+(exit code: 0)
+
+### 다른 프로세스가 잠금을 12초 쥐고 있으면 — 10초 기다린 뒤 exit 2 (로그를 건드리지 않음)
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet; echo "exit=$?"
+[ERROR] 다른 monitor.sh 가 실행 중입니다 (잠금 대기 10초 초과)
+exit=2
+(exit code: 0)
+
+## ⑦ CPU 샘플링 간격 (#10) — CPU_SAMPLE_SEC 동안 /proc/stat 을 두 번 읽은 차이
+$ for s in 1 3; do TIMEFORMAT="CPU_SAMPLE_SEC=$s → 실행 %Rs"; time sudo -u agent-admin env CPU_SAMPLE_SEC=$s MONITOR_LOG=/tmp/s.log /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet; done; rm -f /tmp/s.log
+[WARNING] MEM threshold exceeded (60.6% > 10%)
+CPU_SAMPLE_SEC=1 → 실행 1.270s
+[WARNING] MEM threshold exceeded (60.6% > 10%)
+CPU_SAMPLE_SEC=3 → 실행 3.284s
+(exit code: 0)
+
+## ⑧ ss 를 쓰는 이유 (#9) — Ubuntu 22.04 기본 설치에 ss(iproute2)는 있고 netstat(net-tools)은 없음
+$ dpkg -S /bin/ss; command -v netstat || echo 'netstat: 설치되어 있지 않음 (net-tools 패키지 필요)'
+iproute2: /bin/ss
+netstat: 설치되어 있지 않음 (net-tools 패키지 필요)
+(exit code: 0)
+
+## ⑨ 보안 모듈 (#14) — Ubuntu 는 SELinux 가 아니라 AppArmor
+$ command -v getenforce || echo 'getenforce 없음 → SELinux 미사용'
+getenforce 없음 → SELinux 미사용
+(exit code: 0)
+
+$ cat /sys/module/apparmor/parameters/enabled 2>/dev/null
+Y
+(exit code: 0)
+
+$ for p in $(pgrep -x agent-app-linux); do printf 'PID %s AppArmor: ' $p; cat /proc/$p/attr/current; done
+PID 2939 AppArmor: unconfined
+PID 2941 AppArmor: unconfined
+(exit code: 0)
+
+→ agent-app 에는 AppArmor 프로파일이 없어(unconfined) 접근 제어는 소유/그룹/ACL 만으로 결정된다. 컨테이너 안이라 호스트 커널의 값이 보인다.
+## ⑩ 웹서버 전환 시 추가 지표 — 응답시간(latency) (#17) · 같은 서버에 nginx(Ubuntu 22.04 패키지)를 띄워 측정
+### 바깥에서 본 응답시간 — curl 20회, 연결/첫 바이트/전체 시간 중 전체(total)의 p50·p95·max
+$ for i in $(seq 20); do curl -o /dev/null -s -w '%{http_code} %{time_connect} %{time_starttransfer} %{time_total}\n' http://127.0.0.1/; done > /tmp/lat.txt; head -n 3 /tmp/lat.txt; echo ...; awk '{print $4*1000}' /tmp/lat.txt | sort -n | awk '{a[NR]=$1} END {printf "n=%d p50=%.2fms p95=%.2fms max=%.2fms\n", NR, a[int(NR*0.5)], a[int(NR*0.95)], a[NR]}'; awk '$1 != 200' /tmp/lat.txt | wc -l | xargs echo '200 이 아닌 응답 수:'
+200 0.000172 0.000595 0.000649
+200 0.000171 0.000528 0.000578
+200 0.000167 0.000575 0.000669
+...
+n=20 p50=0.65ms p95=0.72ms max=0.82ms
+200 이 아닌 응답 수: 0
+(exit code: 0)
+
+### 서버 안에서 본 처리시간 — access log 에 $request_time 을 남기는 형식 추가 (기존 access.log 는 그대로)
+$ install -m 0644 /root/timing.conf /etc/nginx/conf.d/timing.conf; cat /etc/nginx/conf.d/timing.conf; nginx -t 2>&1 && systemctl reload nginx
+# 응답시간 기록용 형식 (기존 access.log 는 그대로 두고 timing.log 를 하나 더 남긴다)
+log_format timing '$remote_addr [$time_local] "$request" $status rt=$request_time';
+access_log /var/log/nginx/timing.log timing;
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+(exit code: 0)
+
+$ for i in $(seq 20); do curl -o /dev/null -s http://127.0.0.1/; done; tail -n 2 /var/log/nginx/timing.log
+127.0.0.1 [09/Nov/2026:23:39:52 +0900] "GET / HTTP/1.1" 200 rt=0.000
+127.0.0.1 [09/Nov/2026:23:39:52 +0900] "GET / HTTP/1.1" 200 rt=0.000
+(exit code: 0)
+
+### 임계값 판정 예 — 최근 100건 p95 가 LATENCY_WARN_MS(예 200ms)를 넘으면 WARNING (monitor.sh 의 CPU/MEM 경고와 같은 '경고만' 등급)
+$ LATENCY_WARN_MS=200; p95=$(tail -n 100 /var/log/nginx/timing.log | grep -o 'rt=[0-9.]*' | cut -d= -f2 | sort -n | awk '{a[NR]=$1} END {printf "%.1f", a[int(NR*0.95)]*1000}'); echo "p95=${p95}ms"; awk -v p="$p95" -v t=$LATENCY_WARN_MS 'BEGIN { if (p > t) print "[WARNING] latency p95 " p "ms > " t "ms"; else print "[OK] latency p95 " p "ms <= " t "ms" }'
+p95=0.0ms
+[OK] latency p95 0.0ms <= 200ms
+(exit code: 0)
+
+→ 정적 페이지라 nginx 내부 처리시간은 0.000초(ms 단위 해상도). 앱 서버 앞의 리버스 프록시라면 $upstream_response_time 을 같은 방식으로 본다.
+
+### 5xx 비율 — 응답시간과 함께 보는 오류 지표
+$ awk '{ n++; if ($9 ~ /^5/) e++ } END { printf "요청 %d건 중 5xx %d건 (%.1f%%)\n", n, e, n ? 100*e/n : 0 }' /var/log/nginx/access.log
+요청 40건 중 5xx 0건 (0.0%)
+(exit code: 0)
+
+$ rm -f /etc/nginx/conf.d/timing.conf && systemctl reload nginx && systemctl stop nginx; echo '정리: 측정용 설정 제거, nginx 중지'
+정리: 측정용 설정 제거, nginx 중지
+(exit code: 0)
+
