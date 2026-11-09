@@ -6,6 +6,8 @@
 # 임시 폴더를 AGENT_HOME / AGENT_LOG_DIR 로 쓰고, 가짜 앱(tests/fake_agent_app.py)을
 # agent_app.py 라는 이름으로 띄워 실제와 같은 조건에서 스크립트를 실행한다.
 set -uo pipefail
+export LC_ALL=C      # 검사 대상 스크립트와 같은 로케일. ubuntu-22.04 의 grep 3.7 은 C.UTF-8 에서
+                     # "\[8/8\].*\[OK\]" 처럼 한글이 섞인 줄의 .* 매칭을 놓친다(CI 에서 실제로 발생)
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d -t lso-test-XXXXXX)"
 PORT="${TEST_PORT:-$(( 20000 + RANDOM % 20000 ))}"
