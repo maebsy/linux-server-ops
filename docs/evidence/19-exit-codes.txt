@@ -1,0 +1,124 @@
+# monitor.sh 종료 코드 — 0 정상 / 1 Health Check 실패(프로세스 · 포트) / 2 실행 환경 오류, 그리고 extended 로그 포맷
+# 수집: 2026-11-09 19:09:09 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 방법: 실제 서버에서 상황을 하나씩 만들고 cron 과 같은 agent-admin 계정으로 monitor.sh 를 수동 실행. 각 명령 아래 (exit code: N) 이 그 명령의 종료 코드(echo $? 값)
+
+## ① 정상 — exit 0
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 1658)
+Checking port 15034... [OK]
+Checking firewall... [OK] (active)
+
+[RESOURCE MONITORING]
+CPU Usage : 10.8%
+MEM Usage : 60.2%
+DISK Used : 29%
+Process   : PID 1658 CPU 47.1% MEM 0.9% RSS 139.3MB Threads 1
+
+[WARNING] MEM threshold exceeded (60.2% > 10%)
+
+[INFO] Log appended: /var/log/agent-app/monitor.log
+(exit code: 0)
+
+## ② 프로세스 없음 — 앱 중지 → exit 1 (로그 기록 안 함)
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --stop; sleep 2
+[INFO] 종료 신호를 보냈습니다 (PID 1656)
+(exit code: 0)
+
+$ wc -l < /var/log/agent-app/monitor.log
+6
+(exit code: 0)
+
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [FAIL]
+[ERROR] 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+(exit code: 1)
+
+$ wc -l < /var/log/agent-app/monitor.log
+6
+(exit code: 0)
+
+## ③ 프로세스는 있는데 포트가 안 열림 — LISTEN 하지 않는 같은 이름의 프로세스(테스트용 가짜 앱 agent_app.py --no-listen) → exit 1
+$ ps -o pid,user,args -C python3
+    PID USER     COMMAND
+   2061 agent-a+ python3 /tmp/agent_app.py 15034 --no-listen
+(exit code: 0)
+
+$ ss -Hltn 'sport = :15034'
+(exit code: 0)
+
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 2061)
+Checking port 15034... [FAIL]
+[ERROR] TCP 15034 포트가 LISTEN 상태가 아닙니다 (프로세스는 PID 2061 로 실행 중)
+(exit code: 1)
+
+$ pkill -f '^python3 /tmp/agent_app.py'; sleep 1
+(exit code: 0)
+
+## ④ 설정 오류 — 앱은 15034 에 정상인데 AGENT_PORT 를 잘못 준 경우(15999) → 포트 FAIL, exit 1
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background >/dev/null; sleep 3; ss -Hltn 'sport = :15034'
+LISTEN 0      1      0.0.0.0:15034 0.0.0.0:*
+(exit code: 0)
+
+$ sudo -u agent-admin env AGENT_ENV_FILE=/dev/null AGENT_PORT=15999 /home/agent-admin/agent-app/bin/monitor.sh --no-stats
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 2127)
+Checking port 15999... [FAIL]
+[ERROR] TCP 15999 포트가 LISTEN 상태가 아닙니다 (프로세스는 PID 2127 로 실행 중)
+(exit code: 1)
+
+## ⑤ 실행 환경 오류 — exit 2 (로그 디렉토리 권한 없음 / 잘못된 옵션 / 잘못된 임계값)
+$ sudo -u agent-admin env AGENT_ENV_FILE=/dev/null AGENT_LOG_DIR=/var/log /home/agent-admin/agent-app/bin/monitor.sh --no-stats
+[ERROR] 로그 디렉토리에 쓸 권한이 없습니다: /var/log (현재 사용자: agent-admin, agent-core 그룹 필요)
+(exit code: 2)
+
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats --bogus
+[ERROR] 알 수 없는 옵션: --bogus (--help 참고)
+(exit code: 2)
+
+$ sudo -u agent-admin env CPU_WARN=abc /home/agent-admin/agent-app/bin/monitor.sh --no-stats
+[ERROR] CPU_WARN 값이 숫자가 아닙니다: abc
+(exit code: 2)
+
+## ⑥ extended 포맷 — MONITOR_LOG_FORMAT=extended (기본 필드 뒤에 프로세스 자원·방화벽 상태를 덧붙임, 임시 로그 파일에 기록)
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env MONITOR_LOG_FORMAT=extended MONITOR_LOG=/var/log/agent-app/monitor-extended-demo.log /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet
+[WARNING] MEM threshold exceeded (60.2% > 10%)
+(exit code: 0)
+
+$ cat /var/log/agent-app/monitor-extended-demo.log
+[2026-11-09 19:09:21] PID:2127 CPU:11.6% MEM:60.2% DISK_USED:29% P_CPU:46.0% P_MEM:0.5% RSS:89.3MB THREADS:1 FIREWALL:active
+(exit code: 0)
+
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/report.sh --file /var/log/agent-app/monitor-extended-demo.log
+====== STATISTICS REPORT ======
+Period  : 2026-11-09 19:09:21 ~ 2026-11-09 19:09:21
+[CPU]
+  Average : 11.6%
+  Maximum : 11.6% at 2026-11-09 19:09:21
+  Minimum : 11.6% at 2026-11-09 19:09:21
+[Memory]
+  Average : 60.2%
+  Maximum : 60.2% at 2026-11-09 19:09:21
+  Minimum : 60.2% at 2026-11-09 19:09:21
+[Disk]
+  Average : 29.0%
+  Maximum : 29.0% at 2026-11-09 19:09:21
+  Minimum : 29.0% at 2026-11-09 19:09:21
+[Samples]
+  Data Points: 1 samples
+(exit code: 0)
+
+$ rm -f /var/log/agent-app/monitor-extended-demo.log
+(exit code: 0)
+

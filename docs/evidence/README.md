@@ -41,6 +41,33 @@
 | [`14-failure-cases.txt`](14-failure-cases.txt) | 방화벽 꺼짐 → 경고만(exit 0), 앱 중지 → Health Check 실패(exit 1, 기록 안 함, cron.log 에 원인), 재시작 → 정상 | 6 |
 | [`15-retention-demo.txt`](15-retention-demo.txt) | [보너스 2] 수정 시각을 과거로 맞춘 시연용 파일로 실제 압축 · 이동 · 삭제 | 보너스 2 |
 
+### 동료 평가 피드백 반영 (2026-11-09)
+
+동료 평가의 부족한 점 · 보완 요청을 반영하며 같은 환경을 새로 만들어 실행한 결과입니다. 항목별 대응은 [`../feedback-checklist.md`](../feedback-checklist.md).
+
+| 파일 | 내용 | 피드백 |
+| --- | --- | --- |
+| [`16-ports.txt`](16-ports.txt) | 새 서버에서 setup **전**(sshd 22) / **후**(sshd 20022, 앱 15034) `ss -tulnp` · `ss -tlnp` 전체 출력, `sshd -T`, UFW 비교 | #1 |
+| [`17-firewalld.txt`](17-firewalld.txt) | firewalld 서버(`fw-server`)에서 `02-firewall-firewalld.sh` 실행, runtime/permanent 포트, 바깥 접속(허용 밖은 REJECT), monitor.sh 연동 | #2 |
+| [`18-boot-stages.txt`](18-boot-stages.txt) | Boot 1/5~5/5 단계별 사전 점검 → 줄별 시각 기록 → 4/5 · 5/5 실패 재현 | #4 |
+| [`19-exit-codes.txt`](19-exit-codes.txt) | exit 0 / 1(프로세스 없음 · 포트 없음 · 포트 설정 오류) / 2(로그 쓰기 불가 · 잘못된 옵션 · 잘못된 임계값), extended 포맷 실제 줄과 report.sh 집계 | #5 · #6 |
+| [`20-cron-check.txt`](20-cron-check.txt) | `verify/check-cron.sh` — 정상 / cron 서비스 중지 / monitor.sh 실행 권한 회수 → 제시된 복구 명령 → 재점검 (7단계 'env 로드' 를 넣기 전에 수집해 `[i/6]` 으로 표시됨 — 7단계 결과는 `27` ③) | #7 · #11 |
+| [`21-port-diagnosis.txt`](21-port-diagnosis.txt) | `bin/diagnose-port.sh` — 방화벽 규칙 삭제 · 미개방 · 루프백 · 포트 선점 · 포트 오타를 만들어 진단, 바깥 접속 결과 대조 | #18 |
+| [`22-fail2ban.txt`](22-fail2ban.txt) | `setup/08-fail2ban.sh` — 다른 호스트에서 없는 계정으로 반복 접속 → 차단(UFW 규칙) → 해제 | #13 |
+| [`23-nginx-migration.txt`](23-nginx-migration.txt) | nginx 1.18 설치 → 전환 전 체크포인트 → 함정 2가지 → 전환 절차 → cron 병행 → 롤백 | #17 |
+| [`24-logrotate.txt`](24-logrotate.txt) | (대안) logrotate — 0664 설정 파일 무시, `-d` 미리 보기, `su` 없으면 거부 / 있으면 순환, 동시 사용 점검 | #8 · #12 |
+| [`25-alert.txt`](25-alert.txt) | `ALERT_CMD` → `alert.sh` — syslog(user.warning / user.crit), 다른 호스트의 웹훅 수신, 쿨다운 | #15 |
+| [`26-redirect.txt`](26-redirect.txt) | `>` 와 `>>`, crontab 의 `>` 실수, `2>&1` 순서 실수 재현 | #16 |
+
+### 2차 동료 평가 반영 (2026-11-09)
+
+| 파일 | 내용 | 2차 피드백 |
+| --- | --- | --- |
+| [`27-feedback-round2.txt`](27-feedback-round2.txt) | ① 계정 잠금·비밀번호 정책 ② 로그 타임존·UTC 변환 ③ `check-cron.sh` 7단계(cron 환경 env 로드)·env 읽기 불가 장애→복구·cron 계정으로 `env -i` 실행 ④ Health Check 실패 시 `[HINT]` ⑤ 포트 선점 상태에서 바인딩 실패 원인 수집 ⑥ 동시 실행·잠금 점유 ⑦ CPU 샘플링 간격 ⑧ ss/netstat 가용성 ⑨ AppArmor 상태 ⑩ nginx 응답시간(p50·p95)·`$request_time`·5xx 비율 | #3 · #5 · #6 · #7 · #9 · #10 · #11 · #14 · #16 · #17 · #18 |
+| (기존) [`06a-boot-foreground.txt`](06a-boot-foreground.txt) · [`18-boot-stages.txt`](18-boot-stages.txt) | 앱을 포그라운드로 띄운 Boot Sequence 원본 출력(`Agent READY` 포함)과 줄별 시각 기록 | #4 (FAIL) |
+
+추가 환경: 새로 띄운 `agent-server`(같은 Dockerfile, `logrotate · fail2ban · curl · lsof` 추가 설치 — fail2ban 은 꺼 둔 채로 시작), firewalld 검증용 `fw-server`(같은 이미지에서 ufw 제거 후 firewalld 설치), 바깥 점검용 `ops-laptop`. 27 은 `setup/run-all.sh` 로 새로 구성한 `agent-server` 에서 수집했고, ⑩ 만 nginx 를 apt 로 설치해 측정한 뒤 측정용 설정을 지우고 중지했습니다. 22 · 23 은 각 파일에 적힌 대로 서버에 `fail2ban`(이미지에 포함) · `nginx`(apt 설치)를 켜고 끝에 원래 상태로 되돌렸습니다.
+
 ## 재현 방법
 
 ```bash
@@ -68,3 +95,5 @@ docker exec ops-laptop bash /root/remote-check.sh agent-server agent-admin --blo
 ```
 
 `06a` · `06b` · `14` · `15` 는 각 파일 머리에 적힌 명령을 서버 안에서 실행해 같은 형식으로 남긴 것입니다.
+
+`16` ~ `26` 도 파일 머리의 `# 방법:` 에 적힌 대로 서버 안에서 명령을 실행해 `$ 명령` / 출력 / `(exit code: N)` 형식으로 남겼습니다. 바깥에서 확인한 줄은 `(ops-laptop)` 으로 표시했습니다.

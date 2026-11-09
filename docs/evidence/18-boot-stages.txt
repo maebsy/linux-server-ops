@@ -1,0 +1,142 @@
+# Boot Sequence 단계별 기록 — 단계마다 사전 점검 → 실행(시각 표시) → 단계별 실패 재현
+# 수집: 2026-11-09 19:07:28 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 방법: 각 단계가 확인하는 조건을 실행 전에 직접 점검하고, script 로 TTY 출력을 받아 줄마다 시각을 붙여 기록 (8초 후 SIGINT)
+
+## 사전 점검 — 앱이 각 단계에서 확인하는 조건을 먼저 직접 확인
+### [1/5] Checking User Account — root 가 아닌 서비스 계정인가
+$ sudo -iu agent-admin id
+uid=1000(agent-admin) gid=1002(agent-admin) groups=1002(agent-admin),1000(agent-common),1001(agent-core)
+(exit code: 0)
+
+### [2/5] Verifying Environment Variables — 로그인 셸에 필요한 AGENT_* 가 있는가
+$ sudo -iu agent-admin env | grep ^AGENT_ | sort
+AGENT_HOME=/home/agent-admin/agent-app
+AGENT_KEY_PATH=/home/agent-admin/agent-app/api_keys
+AGENT_LOG_DIR=/var/log/agent-app
+AGENT_PORT=15034
+AGENT_UPLOAD_DIR=/home/agent-admin/agent-app/upload_files
+(exit code: 0)
+
+### [3/5] Checking Required Files — AGENT_KEY_PATH 디렉토리에 secret.key 가 있고 읽을 수 있는가 (내용은 출력하지 않음)
+$ sudo -iu agent-admin bash -c 'ls -l "$AGENT_KEY_PATH"/ && test -r "$AGENT_KEY_PATH/secret.key" && echo "secret.key readable"'
+total 4
+lrwxrwxrwx  1 agent-admin agent-core 12 Nov  9 19:06 secret.key -> t_secret.key
+-rw-r-----+ 1 agent-admin agent-core 19 Nov  9 19:06 t_secret.key
+secret.key readable
+(exit code: 0)
+
+### [4/5] Checking Port Availability — 15034 를 다른 프로세스가 쓰고 있지 않은가 (출력이 비어 있으면 사용 가능)
+$ ss -Hltnp 'sport = :15034'
+(exit code: 0)
+
+### [5/5] Verifying Log Permission — 로그 디렉토리에 쓸 수 있는가
+$ sudo -iu agent-admin bash -c 'test -w "$AGENT_LOG_DIR" && echo "writable: $AGENT_LOG_DIR"'; ls -ld /var/log/agent-app
+writable: /var/log/agent-app
+drwxrws---+ 2 agent-admin agent-core 4096 Nov  9 19:07 /var/log/agent-app
+(exit code: 0)
+
+## 실행 — 줄마다 수신 시각 (단계가 차례로 통과되는 모습)
+$ sudo -iu agent-admin script -q -c "/home/agent-admin/agent-app/bin/run-agent.sh" /dev/null | (줄마다 시각 표시)
+[19:07:28.534] >>> Starting Agent Boot Sequence...
+[19:07:28.537] [1/5] Checking User Account               [OK]
+[19:07:28.540]    ... Running as service user 'agent-admin' (uid=1000)
+[19:07:28.543] [2/5] Verifying Environment Variables     [OK]
+[19:07:28.546]    ... All required Envs correct
+[19:07:28.549] [3/5] Checking Required Files             [OK]
+[19:07:28.552]    ... Verified 'secret.key' with correct key string.
+[19:07:28.555] [4/5] Checking Port Availability          [OK]
+[19:07:28.558]    ... Port 15034 is available.
+[19:07:28.561] [5/5] Verifying Log Permission            [OK]
+[19:07:28.564]    ... Log directory is writable: /var/log/agent-app
+[19:07:28.566] ------------------------------------------------------------
+[19:07:28.569] All Boot Checks Passed!
+[19:07:28.571] Agent READY
+[19:07:28.574] 2026-11-09 19:07:28,532 [INFO] [SafetyGuard] Process priority lowered (nice=10).
+[19:07:28.577] 2026-11-09 19:07:28,532 [INFO] Agent listening at port 15034
+[19:07:28.579] 2026-11-09 19:07:28,532 [INFO] === Agent Worker Started ===
+[19:07:28.582] 2026-11-09 19:07:28,532 [INFO]    > Cycle: 0 -> 256MB/Lv10 -> 0
+[19:07:28.585] 2026-11-09 19:07:28,533 [INFO] --- Step Info: Mode=UP, CPU Lv=1, Mem=0MB ---
+[19:07:28.587] 2026-11-09 19:07:28,550 [INFO] [Memory] Increasing... (+25 MB) Total: 25 MB
+[19:07:28.589] 2026-11-09 19:07:28,550 [INFO] [CPU] Occupy core for 1s (Level 1)
+[19:07:30.559] 2026-11-09 19:07:30,556 [INFO] --- Step Info: Mode=UP, CPU Lv=2, Mem=25MB ---
+[19:07:30.589] 2026-11-09 19:07:30,585 [INFO] [Memory] Increasing... (+25 MB) Total: 50 MB
+[19:07:30.591] 2026-11-09 19:07:30,586 [INFO] [CPU] Occupy core for 2s (Level 2)
+[19:07:33.596] 2026-11-09 19:07:33,592 [INFO] --- Step Info: Mode=UP, CPU Lv=3, Mem=50MB ---
+[19:07:33.626] 2026-11-09 19:07:33,623 [INFO] [Memory] Increasing... (+25 MB) Total: 75 MB
+[19:07:33.629] 2026-11-09 19:07:33,624 [INFO] [CPU] Occupy core for 3s (Level 3)
+[19:07:36.326] 
+[19:07:38.326] Session terminated, killing shell... ...killed.
+
+## 단계별 실패 재현 (1·2·3단계는 06b-boot-troubleshooting.txt, 여기서는 4·5단계)
+### [4/5] 실패 — 다른 프로세스가 15034 를 먼저 점유
+$ ss -Hltnp 'sport = :15034'
+LISTEN 0      128    0.0.0.0:15034 0.0.0.0:* users:(("python3",pid=874,fd=3))
+(exit code: 0)
+
+$ sudo -iu agent-admin timeout 6 /home/agent-admin/agent-app/bin/run-agent.sh
+>>> Starting Agent Boot Sequence...
+[1/5] Checking User Account               [OK]
+   ... Running as service user 'agent-admin' (uid=1000)
+[2/5] Verifying Environment Variables     [OK]
+   ... All required Envs correct
+[3/5] Checking Required Files             [OK]
+   ... Verified 'secret.key' with correct key string.
+[4/5] Checking Port Availability          [FAIL]
+   >>> Port 15034 is already in use.
+[5/5] Verifying Log Permission            [FAIL]
+   >>> Skipped due to previous critical failure.
+--------------------------------------------------
+System Boot Failed. Process Terminated.
+(exit code: 1)
+
+### [5/5] 실패 — 로그 디렉토리 쓰기 권한을 잠시 회수 (소유자·그룹 w 제거)
+$ chmod u-w,g-w /var/log/agent-app && ls -ld /var/log/agent-app
+dr-xr-s---+ 2 agent-admin agent-core 4096 Nov  9 19:07 /var/log/agent-app
+(exit code: 0)
+
+$ sudo -iu agent-admin timeout 6 /home/agent-admin/agent-app/bin/run-agent.sh
+>>> Starting Agent Boot Sequence...
+[1/5] Checking User Account               [OK]
+   ... Running as service user 'agent-admin' (uid=1000)
+[2/5] Verifying Environment Variables     [OK]
+   ... All required Envs correct
+[3/5] Checking Required Files             [OK]
+   ... Verified 'secret.key' with correct key string.
+[4/5] Checking Port Availability          [OK]
+   ... Port 15034 is available.
+[5/5] Verifying Log Permission            [FAIL]
+   >>> Permission Denied: User 'agent-admin' cannot write to /var/log/agent-app
+--------------------------------------------------
+System Boot Failed. Process Terminated.
+(exit code: 1)
+
+$ chmod u+w,g+w /var/log/agent-app && ls -ld /var/log/agent-app
+drwxrws---+ 2 agent-admin agent-core 4096 Nov  9 19:07 /var/log/agent-app
+(exit code: 0)
+
+## 정상 상태로 백그라운드 실행 (이후 관제용)
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background; sleep 3; ss -Hltnp 'sport = :15034'
+[INFO] 백그라운드 실행: PID 910 (출력: /var/log/agent-app/agent-app.out)
+[1/5] Checking User Account               [OK]
+   ... Running as service user 'agent-admin' (uid=1000)
+[2/5] Verifying Environment Variables     [OK]
+   ... All required Envs correct
+[3/5] Checking Required Files             [OK]
+   ... Verified 'secret.key' with correct key string.
+[4/5] Checking Port Availability          [OK]
+   ... Port 15034 is available.
+[5/5] Verifying Log Permission            [OK]
+   ... Log directory is writable: /var/log/agent-app
+------------------------------------------------------------
+All Boot Checks Passed!
+Agent READY
+2026-11-09 19:07:40,057 [INFO] [SafetyGuard] Process priority lowered (nice=10).
+2026-11-09 19:07:40,057 [INFO] Agent listening at port 15034
+2026-11-09 19:07:40,057 [INFO] === Agent Worker Started ===
+2026-11-09 19:07:40,057 [INFO]    > Cycle: 0 -> 256MB/Lv10 -> 0
+2026-11-09 19:07:40,057 [INFO] --- Step Info: Mode=UP, CPU Lv=1, Mem=0MB ---
+2026-11-09 19:07:40,074 [INFO] [Memory] Increasing... (+25 MB) Total: 25 MB
+2026-11-09 19:07:40,074 [INFO] [CPU] Occupy core for 1s (Level 1)
+LISTEN 0      1      0.0.0.0:15034 0.0.0.0:* users:(("agent-app-linux",pid=912,fd=4))
+(exit code: 0)
+

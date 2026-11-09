@@ -1,0 +1,76 @@
+# 경고 알림 연동 — monitor.sh ALERT_CMD → bin/alert.sh (syslog + 웹훅, 같은 경고는 10분에 1번)
+# 수집: 2026-11-09 19:31:11 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 참고: 첫 시도에서 웹훅이 전송되지 않았다 — monitor.sh 는 env 파일을 source 만 하고 export 하지 않아 자식 alert.sh 에 ALERT_WEBHOOK_URL 이 전달되지 않았기 때문. alert.sh 가 env 파일을 직접 읽도록 고친 뒤 다시 수집한 결과이며, syslog 의 19:28 두 줄은 그 첫 시도의 기록이다.
+# 방법: 공용 env 에 ALERT_CMD 와 시험용 웹훅 주소(같은 네트워크의 ops-laptop:9000 에 띄운 수신기)를 넣고 수동 실행·cron 실행 결과를 확인
+
+## ① 설정 — env 파일에 두 줄 추가 (웹훅 URL 이 들어가므로 0640 root:agent-core 로 권한 축소)
+$ cp -a /etc/agent-app/agent-app.env /etc/agent-app/agent-app.env.bak.alert && printf 'ALERT_CMD=%s\nALERT_WEBHOOK_URL=%s\n' /home/agent-admin/agent-app/bin/alert.sh http://ops-laptop:9000/hook >> /etc/agent-app/agent-app.env && chown root:agent-core /etc/agent-app/agent-app.env && chmod 0640 /etc/agent-app/agent-app.env && ls -l /etc/agent-app/agent-app.env && tail -n 2 /etc/agent-app/agent-app.env
+-rw-r----- 1 root agent-core 359 Nov  9 19:31 /etc/agent-app/agent-app.env
+ALERT_CMD=/home/agent-admin/agent-app/bin/alert.sh
+ALERT_WEBHOOK_URL=http://ops-laptop:9000/hook
+(exit code: 0)
+
+## ② 경고 발생 (MEM 임계값 초과) → syslog 에 user.warning 으로 기록
+$ sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet; echo "monitor.sh exit=$?"
+[WARNING] MEM threshold exceeded (57.8% > 10%)
+monitor.sh exit=0
+(exit code: 0)
+
+$ sleep 1; grep agent-monitor /var/log/syslog | tail -n 3
+Nov  9 19:28:30 agent-server agent-monitor: [2026-11-09 19:28:30] [WARNING] host=agent-server MEM threshold exceeded (57.6% > 10%)
+Nov  9 19:28:36 agent-server agent-monitor: [2026-11-09 19:28:36] [CRITICAL] host=agent-server 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+Nov  9 19:31:12 agent-server agent-monitor: [2026-11-09 19:31:12] [WARNING] host=agent-server MEM threshold exceeded (57.8% > 10%)
+(exit code: 0)
+
+## ③ 바로 다시 실행 — 숫자만 다른 같은 경고라 쿨다운(600초) 동안 다시 보내지 않음
+$ before=$(grep -c agent-monitor /var/log/syslog); sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >/dev/null; sleep 1; after=$(grep -c agent-monitor /var/log/syslog); echo "syslog 알림 줄 수: $before → $after"
+syslog 알림 줄 수: 3 → 3
+(exit code: 0)
+
+$ ls -l --time-style=+%T /var/log/agent-app/.alert-state/
+total 0
+-rw-rw----+ 1 agent-admin agent-core 0 19:31:12 4043675348_38
+(exit code: 0)
+
+## ④ 장애 발생 (앱 중지) → CRITICAL, user.crit
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --stop; sleep 2; sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet; echo "monitor.sh exit=$?"
+[INFO] 종료 신호를 보냈습니다 (PID 9979)
+[ERROR] 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+monitor.sh exit=1
+(exit code: 0)
+
+$ sleep 1; grep agent-monitor /var/log/syslog | tail -n 1
+Nov  9 19:31:17 agent-server agent-monitor: [2026-11-09 19:31:17] [CRITICAL] host=agent-server 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+(exit code: 0)
+
+$ journalctl -t agent-monitor -p crit --no-pager -o short | tail -n 1
+Nov 09 19:31:17 agent-server agent-monitor[10693]: [2026-11-09 19:31:17] [CRITICAL] host=agent-server 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+(exit code: 0)
+
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background >/dev/null; sleep 3; sudo -u agent-admin env AGENT_ENV_FILE=/etc/agent-app/agent-app.env /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet; echo "monitor.sh exit=$?  (복구 — 알림 훅은 결과에 영향 없음)"
+[WARNING] MEM threshold exceeded (56.5% > 10%)
+monitor.sh exit=0  (복구 — 알림 훅은 결과에 영향 없음)
+(exit code: 0)
+
+## ⑤ 웹훅 수신 확인 — 수신기(ops-laptop:9000)가 받은 JSON (경고 1건 + 장애 1건, 쿨다운으로 중복 없음)
+$ (ops-laptop) cat /root/hook.log
+POST /hook {"text":"[2026-11-09 19:31:12] [WARNING] host=agent-server MEM threshold exceeded (57.8% > 10%)"}
+POST /hook {"text":"[2026-11-09 19:31:17] [CRITICAL] host=agent-server 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)"}
+
+## ⑥ cron 실행에서도 같은 경로로 알림 — 매분 경고가 나도 syslog 알림은 쿨다운 단위로만
+$ grep CRON /var/log/syslog | grep agent-admin | tail -n 2 | cut -c1-120; echo; grep agent-monitor /var/log/syslog | tail -n 4
+Nov  9 19:32:01 agent-server CRON[10818]: (agent-admin) CMD (/home/agent-admin/agent-app/bin/monitor.sh --no-stats --qui
+Nov  9 19:33:01 agent-server CRON[10914]: (agent-admin) CMD (/home/agent-admin/agent-app/bin/monitor.sh --no-stats --qui
+
+Nov  9 19:28:30 agent-server agent-monitor: [2026-11-09 19:28:30] [WARNING] host=agent-server MEM threshold exceeded (57.6% > 10%)
+Nov  9 19:28:36 agent-server agent-monitor: [2026-11-09 19:28:36] [CRITICAL] host=agent-server 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+Nov  9 19:31:12 agent-server agent-monitor: [2026-11-09 19:31:12] [WARNING] host=agent-server MEM threshold exceeded (57.8% > 10%)
+Nov  9 19:31:17 agent-server agent-monitor: [2026-11-09 19:31:17] [CRITICAL] host=agent-server 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+(exit code: 0)
+
+## ⑦ 원상 복구 (env 원본 복원)
+$ mv /etc/agent-app/agent-app.env.bak.alert /etc/agent-app/agent-app.env && ls -l /etc/agent-app/agent-app.env && grep -c ALERT /etc/agent-app/agent-app.env || true
+-rw-r--r-- 1 root root 262 Nov  9 19:06 /etc/agent-app/agent-app.env
+0
+(exit code: 0)
+

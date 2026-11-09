@@ -30,6 +30,8 @@
 | + | 서버 구성 실행 기록 | [`00-setup.txt`](evidence/00-setup.txt) | ☑ |
 | + | 환경변수 · Boot 실패 재현 | [`05-environment.txt`](evidence/05-environment.txt) · [`06b-boot-troubleshooting.txt`](evidence/06b-boot-troubleshooting.txt) | ☑ |
 | + | 로그 용량 관리 · 보너스 1 · 보너스 2 | [`10-log-capacity.txt`](evidence/10-log-capacity.txt) · [`11-report.txt`](evidence/11-report.txt) · [`12-retention.txt`](evidence/12-retention.txt) · [`15-retention-demo.txt`](evidence/15-retention-demo.txt) | ☑ |
+| + | 동료 평가 피드백 보완 (2026-11-09) — setup 전후 `ss`, firewalld, Boot 단계별, exit 1·2, cron 장애 복구, 포트 진단, fail2ban, nginx 전환, logrotate, 알림, `>` 실수 | [`16`](evidence/16-ports.txt) ~ [`26`](evidence/26-redirect.txt) · 항목별 대응 [`feedback-checklist.md`](feedback-checklist.md) | ☑ |
+| + | 2차 동료 평가 보완 (2026-11-09) — 계정 잠금·비밀번호 정책, 로그 타임존, cron 환경 env 로드 검증(`check-cron.sh` 7단계), Health Check 실패 시 `[HINT]`, 바인딩 실패 로그 수집, 동시 실행 잠금, latency 지표, AppArmor/SELinux 영향 | [`27`](evidence/27-feedback-round2.txt) · [`feedback-checklist.md` 2차 표](feedback-checklist.md#2차-평가-반영) | ☑ |
 
 > 증빙 파일마다 첫머리에 수집 시각 · 호스트 · 실행 명령이 있고, 그 아래가 명령의 실제 출력입니다. 파일 목록과 각 파일이 보여 주는 것: [`evidence/README.md`](evidence/README.md)
 >

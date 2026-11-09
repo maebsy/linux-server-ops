@@ -144,13 +144,15 @@ monitor.sh 가 매분 `>` 로 쓰면 항상 마지막 한 줄만 남아 추이(�
 
 | 포인트 | 현재 (agent-app) | Nginx 로 바꾸면 |
 | --- | --- | --- |
-| 프로세스 | 실행 파일 이름 `^agent[_-]app` | `APP_PROCESS_REGEX='^nginx$'`. master 1개 + worker N개 → **master 존재** + worker 수 ≥ 1 확인. `systemctl is-active nginx` 를 함께 보면 좋다 |
+| 프로세스 | 실행 파일 이름 `^agent[_-]app` | `APP_PROCESS_REGEX='^nginx([: ].*)?$'`. nginx 는 실행 후 명령줄을 `nginx: master process …` / `nginx: worker process` 로 바꿔서 `^nginx$` 로는 **하나도 못 찾는다**(실측). master 1개 + worker N개 → **master 존재** + worker 수 ≥ 1 확인. `systemctl is-active nginx` 를 함께 보면 좋다 |
 | 포트 | 15034 | `AGENT_PORT=80` (+ HTTPS 면 443 을 추가로 검사) |
 | 응답 확인 | LISTEN 여부 | 포트가 열려도 502 를 낼 수 있으므로 `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/health` 가 200 인지 확인 (L7 health check) |
 | 로그 | 앱 로그 | `/var/log/nginx/access.log` 의 최근 1분 **5xx 비율**, `error.log` 의 `upstream timed out`·`connect() failed` 건수 |
 | 임계값 | CPU 20% / MEM 10% | 웹 서버는 CPU 보다 **활성 연결 수**(`stub_status`), 응답 시간, 5xx 비율이 더 중요. `worker_connections` 대비 사용률 |
 
 스크립트는 대상 값이 모두 환경변수라 프로세스 정규식·포트·라벨은 코드 수정 없이 바꿀 수 있고, HTTP 상태 검사와 로그 집계만 함수로 추가하면 됩니다.
+
+> **동료 평가 후 보완(#17)** — 위 답은 처음엔 설계로만 썼습니다. 이후 nginx 를 실제로 설치해 전환 → 검증 → 롤백까지 해 보고 체크포인트·절차를 별도 가이드로 정리했습니다: [`webserver-migration.md`](webserver-migration.md) · 실측 [`evidence/23-nginx-migration.txt`](evidence/23-nginx-migration.txt). 실측에서 `^nginx$` 가 nginx 를 못 찾는다는 것과, 포트만 바꾸면 다른 앱 PID 로 **거짓 OK** 가 나온다는 것을 확인해 위 표를 고쳤습니다.
 
 ### 4-2. "프로세스는 살아 있는데 포트가 안 열리는" 상황의 원인 후보와 확인 순서
 
@@ -162,6 +164,8 @@ monitor.sh 가 매분 `>` 로 쓰면 항상 마지막 한 줄만 남아 추이(�
 6. **방화벽 문제와 구분** — 방화벽은 LISTEN 자체를 막지 않는다. 로컬에서 LISTEN 인데 외부에서만 안 되면 방화벽, 로컬에서도 LISTEN 이 없으면 앱 문제
 
 확인은 **싼 것부터, 범위가 좁은 것부터**: 로그 → `ss` → 환경변수 → 충돌 → 권한 → 스레드 상태 순서입니다.
+
+> 이 순서를 자동으로 짚는 도구 `bin/diagnose-port.sh` 와 원인별 실측은 [`operations.md` §7](operations.md#7-포트-미개방-진단-체크리스트) · [`evidence/21-port-diagnosis.txt`](evidence/21-port-diagnosis.txt).
 
 ### 4-3. 로그가 급증해 디스크가 찰 위험이 있다면 운영자의 단기/중기 대응
 
@@ -177,3 +181,5 @@ monitor.sh 가 매분 `>` 로 쓰면 항상 마지막 한 줄만 남아 추이(�
 - `/var/log` 를 **별도 파티션**으로 분리해 로그가 차도 루트 파티션(서비스)이 멈추지 않게
 - journald `SystemMaxUse=` 설정, 디스크 사용률 경고(현재 80%)를 단계별(80/90/95%)로
 - 장기적으로 중앙 로그 수집(Loki, ELK)으로 서버에는 짧게만 보관
+
+> 실행 전 체크리스트 · 복구 불가 경고 · 단계별 필요 권한을 포함한 긴급 대응 절차: [`operations.md` §11](operations.md#11-로그-급증-긴급-대응)
