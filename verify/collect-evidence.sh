@@ -56,6 +56,8 @@ note "## sshd 가 실제로 적용한 값 (sshd -T: 모든 설정 파일을 합�
 cmd "sshd -T 2>/dev/null | grep -Ei '^(port|permitrootlogin) '"
 note "## 포트 리슨 상태"
 cmd "ss -tulnp | grep -E 'sshd|:$SSH_PORT\\b'"
+note "## 전체 LISTEN 소켓: 20022·15034 외에 열린 포트가 없음을 보이기 위함"
+cmd "ss -tulnp"
 
 # ------------------------------------------------------------------ 02 방화벽
 begin 02-firewall "방화벽 활성화, 20022/tcp · 15034/tcp 만 허용"
@@ -71,6 +73,11 @@ fi
 begin 03-accounts "계정 agent-admin/dev/test, 그룹 agent-common/core"
 cmd "id agent-admin; id agent-dev; id agent-test"
 cmd "getent group agent-common agent-core"
+note "## 계정 잠금·비밀번호 정책 (passwd -S 의 두 번째 칸: L 잠김 / P 비밀번호 있음 / NP 비밀번호 없음)"
+cmd "for u in agent-admin agent-dev agent-test; do passwd -S \$u; done"
+cmd "chage -l agent-admin"
+cmd "grep -E '^(PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_WARN_AGE)' /etc/login.defs"
+cmd "sshd -T 2>/dev/null | grep -Ei '^(passwordauthentication|pubkeyauthentication|permitemptypasswords) '"
 
 # ------------------------------------------------------------------ 04 디렉토리/권한/ACL
 begin 04-permissions "디렉토리 구조, 소유자·권한, ACL, 계정별 접근 매트릭스"
@@ -108,6 +115,8 @@ else
 fi
 cmd "ps -eo user,pid,ppid,etime,cmd | grep -E '[a]gent[-_]app'"
 cmd "ss -tlnp | grep ':$AGENT_PORT\\b'"
+note "## 포트 진단 (diagnose-port.sh: 15034 를 누가·어떻게 여는지 한눈에)"
+cmd "bash $ROOT/bin/diagnose-port.sh"
 
 # ------------------------------------------------------------------ 07 monitor.sh 실행
 begin 07-monitor "monitor.sh 실행 결과 (agent-admin, 프로세스·포트·리소스·경고)"
@@ -133,6 +142,8 @@ if [[ $WAIT -eq 1 ]]; then
     cmd "tail -n 3 $AGENT_LOG_DIR/monitor.log"
 fi
 cmd "grep CRON /var/log/syslog 2>/dev/null | grep agent-admin | tail -n 3"
+note "## cron ↔ syslog ↔ monitor.log 연동 체인 점검 (check-cron.sh)"
+cmd "bash $ROOT/verify/check-cron.sh"
 
 # ------------------------------------------------------------------ 10 용량 관리
 begin 10-log-capacity "monitor.log 용량 관리 (10MB / 10개 파일)"

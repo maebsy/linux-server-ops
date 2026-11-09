@@ -11,7 +11,11 @@ TMP="$(mktemp -d -t lso-test-XXXXXX)"
 PORT="${TEST_PORT:-$(( 20000 + RANDOM % 20000 ))}"
 PASS=0; FAIL=0; APP_PID=""
 
-cleanup() { [[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null; rm -rf "$TMP"; }
+cleanup() {
+    [[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null
+    [[ -n "${HTTP_PID:-}" ]] && kill "$HTTP_PID" 2>/dev/null
+    rm -rf "$TMP"
+}
 trap cleanup EXIT
 
 ok()   { PASS=$((PASS + 1)); printf '  \033[32mPASS\033[0m %s\n' "$1"; }
@@ -103,10 +107,12 @@ run_mon
 check "프로세스 없음 → 종료 코드 1" test "$CODE" -eq 1
 check "프로세스 FAIL 표시" grep -q "Checking process 'agent-app'... \[FAIL\]" <<< "$OUT"
 check "실패 시 monitor.log 에 기록하지 않음" test "$(wc -l < "$AGENT_LOG_DIR/monitor.log")" -eq "$before"
+check "프로세스 없음 → 복구 안내([HINT] 앱 출력 로그·재기동)" bash -c 'grep -q "^\[HINT\] 앱 출력" <<< "$1" && grep -q "^\[HINT\] 재기동" <<< "$1"' _ "$OUT"
 start_app "$PORT" --no-listen
 run_mon
 check "프로세스는 있는데 포트 없음 → 종료 코드 1" test "$CODE" -eq 1
 check "포트 FAIL 표시" grep -q "Checking port $PORT... \[FAIL\]" <<< "$OUT"
+check "포트 없음 → 복구 안내([HINT] diagnose-port.sh·바인딩 오류 로그)" bash -c 'grep -q "^\[HINT\] 원인 진단: .*diagnose-port.sh $2" <<< "$1" && grep -q "^\[HINT\] 바인딩 오류 로그" <<< "$1"' _ "$OUT" "$PORT"
 stop_app
 OUT="$(bash -c 'exec -a /tmp/agent-app/bin/monitor.sh sleep 5' & sleep 0.3; "$MON" --no-stats 2>&1)"; CODE=$?
 check "이름에 agent-app 이 들어간 다른 프로세스(*.sh)는 앱으로 보지 않음" test "$CODE" -eq 1
@@ -192,6 +198,166 @@ check "29일 된 아카이브는 유지" test -e "$ARCHIVE_DIR/recent.log.202501
 check "대상 없을 때 안내" grep -q '압축 대상 없음' <<< "$OUT"
 OUT="$(SRC_DIR="$TMP/nope" ARCHIVE_DIR="$TMP/nope2" "$RET" 2>&1)"; CODE=$?
 check "디렉토리 없음 → 경고 후 정상 종료" bash -c '[[ $1 -eq 0 ]] && grep -q "\[WARN\]" <<< "$2"' _ "$CODE" "$OUT"
+
+section "diagnose-port.sh"
+DIAG="$AGENT_HOME/bin/diagnose-port.sh"
+HTTP_PID=""
+run_diag() { OUT="$(UFW_USER_RULES="$TMP/user.rules" "$DIAG" "$@" 2>&1)"; CODE=$?; }
+
+# a) 앱이 PORT 를 열고 있고 ufw user.rules 에 허용 규칙이 있으면 모두 정상
+printf -- '-A ufw-user-input -p tcp --dport %s -j ACCEPT\n' "$PORT" > "$TMP/user.rules"
+start_app "$PORT"
+run_diag "$PORT"
+check "a) 정상 → 종료 코드 0" test "$CODE" -eq 0
+check "a) 2단계 포트 LISTEN OK" grep -Eq '\[2/8\].*\[OK\]' <<< "$OUT"
+check "a) 8단계 방화벽 허용 OK" grep -Eq '\[8/8\].*\[OK\]' <<< "$OUT"
+
+# b) 같은 앱, user.rules 가 비어 있으면 방화벽 단계는 WARN (그래도 FAIL 아님)
+: > "$TMP/user.rules"
+run_diag "$PORT"
+check "b) 허용 규칙 없어도 종료 코드 0" test "$CODE" -eq 0
+check "b) 8단계 방화벽 WARN" grep -Eq '\[8/8\].*\[WARN\]' <<< "$OUT"
+stop_app
+
+# d) 루프백에만 바인딩 → 2단계 WARN(루프백)
+start_app "$PORT" --bind 127.0.0.1
+run_diag "$PORT"
+check "d) 2단계 루프백 WARN" bash -c 'grep -Eq "\[2/8\].*\[WARN\]" <<< "$1" && grep -q "루프백" <<< "$1"' _ "$OUT"
+stop_app
+
+# e) 앱이 PORT+1 을 열고 있는데 PORT 를 진단 → 3단계에서 실제 포트(PORT+1)를 지목
+start_app "$((PORT + 1))"
+run_diag "$PORT"
+check "e) 포트 불일치 → 종료 코드 1" test "$CODE" -eq 1
+check "e) 3단계가 실제 포트 $((PORT + 1)) 지목" grep -Eq "\[3/8\].*$((PORT + 1))" <<< "$OUT"
+stop_app
+
+# c) --no-listen 으로 포트를 안 연 앱 → 2단계 FAIL
+start_app "$PORT" --no-listen
+run_diag "$PORT"
+check "c) 포트 미개방 → 종료 코드 1" test "$CODE" -eq 1
+check "c) 2단계 포트 LISTEN FAIL" grep -Eq '\[2/8\].*\[FAIL\]' <<< "$OUT"
+
+# f) 앱은 포트를 안 열고(--no-listen) 다른 프로세스가 PORT 를 점유 → 4단계 포트 충돌 FAIL
+python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 & HTTP_PID=$!
+sleep 0.7
+run_diag "$PORT"
+check "f) 포트 충돌 → 종료 코드 1" test "$CODE" -eq 1
+check "f) 4단계 포트 충돌 FAIL" grep -Eq '\[4/8\].*\[FAIL\]' <<< "$OUT"
+kill "$HTTP_PID" 2>/dev/null; wait "$HTTP_PID" 2>/dev/null; HTTP_PID=""
+stop_app
+
+# g) 숫자가 아닌 포트 → 사용법 오류(종료 코드 2)
+run_diag abc
+check "g) 잘못된 포트 → 종료 코드 2" test "$CODE" -eq 2
+
+section "check-cron.sh: cron ↔ syslog ↔ monitor.log 연동 점검"
+CC="$ROOT/verify/check-cron.sh"
+CD="$TMP/cron"; mkdir -p "$CD"
+MLINE='* * * * * /x/monitor.sh --no-stats --quiet >> /x/cron.log 2>&1'
+printf '%s\n' "$MLINE" > "$CD/crontab.good"
+printf '%s\n' '0 3 * * * /x/other.sh' > "$CD/crontab.bad"
+printf '%s host CRON[123]: (agent-admin) CMD (%s)\n' "$(LC_ALL=C date '+%b %e %H:%M:%S')" "/x/monitor.sh --no-stats --quiet >> /x/cron.log 2>&1" > "$CD/syslog.fresh"
+printf '%s host CRON[123]: (agent-admin) CMD (%s)\n' "$(date -Iseconds)" "/x/monitor.sh --no-stats --quiet >> /x/cron.log 2>&1" > "$CD/syslog.rfc"
+printf '[%s] PID:1 CPU:1.0%% MEM:1.0%% DISK_USED:1%%\n' "$(date '+%F %T')" > "$CD/monitor.fresh"
+printf '[%s] PID:1 CPU:1.0%% MEM:1.0%% DISK_USED:1%%\n' "$(date -d '10 minutes ago' '+%F %T')" > "$CD/monitor.stale"
+: > "$CD/cron.empty"
+printf '[ERROR] 앱 프로세스가 실행 중이 아닙니다\n' > "$CD/cron.err"
+printf '[ERROR] 앱 프로세스가 실행 중이 아닙니다\n[HINT] 앱 출력·종료 원인: ...\n[HINT] 재기동: ...\n' > "$CD/cron.hint"
+cc_run() { OUT="$(SKIP_SERVICE=1 SKIP_SUDO=1 CRON_USER=agent-admin \
+    CRONTAB_FILE="$1" SYSLOG_FILE="$2" MONITOR_LOG="$3" CRON_LOG="$4" MAX_AGE_MIN="${5:-3}" \
+    bash "$CC" 2>&1)"; CODE=$?; }
+
+cc_run "$CD/crontab.good" "$CD/syslog.fresh" "$CD/monitor.fresh" "$CD/cron.empty"
+check "a) 정상 체인 → 종료 코드 0" test "$CODE" -eq 0
+check "a) 결론 정상" grep -q '결론: 정상' <<< "$OUT"
+
+cc_run "$CD/crontab.good" "$CD/syslog.fresh" "$CD/monitor.stale" "$CD/cron.empty"
+check "b) monitor.log 오래됨 → 종료 코드 1" test "$CODE" -eq 1
+check "b) 5단계 FAIL" grep -Eq '\[5/7\] monitor.log 갱신 \.\.\. \[FAIL\]' <<< "$OUT"
+
+cc_run "$CD/crontab.bad" "$CD/syslog.fresh" "$CD/monitor.fresh" "$CD/cron.empty"
+check "c) crontab 미등록 → 종료 코드 1" test "$CODE" -eq 1
+check "c) 1단계 FAIL" grep -Eq '\[1/7\] crontab 등록 \.\.\. \[FAIL\]' <<< "$OUT"
+
+cc_run "$CD/crontab.good" "$CD/syslog.fresh" "$CD/monitor.fresh" "$CD/cron.err"
+check "d) cron.log 오류 → 종료 코드 1" test "$CODE" -eq 1
+check "d) 6단계 FAIL" grep -Eq '\[6/7\] cron.log 오류 \.\.\. \[FAIL\]' <<< "$OUT"
+cc_run "$CD/crontab.good" "$CD/syslog.fresh" "$CD/monitor.fresh" "$CD/cron.hint"
+check "d) 오류 뒤 [HINT] 줄이 붙어도 6단계 FAIL" grep -Eq '\[6/7\] cron.log 오류 \.\.\. \[FAIL\] \[ERROR\]' <<< "$OUT"
+
+cc_run "$CD/crontab.good" "$CD/syslog.rfc" "$CD/monitor.fresh" "$CD/cron.empty"
+check "e) RFC3339 syslog 파싱 → 4단계 OK" grep -Eq '\[4/7\] syslog 의 CRON 실행 기록 \.\.\. \[OK\]' <<< "$OUT"
+
+OUT="$(SKIP_SERVICE=1 SKIP_SUDO=1 bash "$CC" --max-age abc 2>&1)"; CODE=$?
+check "f) --max-age abc → 종료 코드 2" test "$CODE" -eq 2
+
+# 7단계: cron 과 같은 최소 환경(env -i)에서 env 파일 로드
+cc_env() { local f="$1"; shift; OUT="$(AGENT_ENV_FILE="$f" SKIP_SERVICE=1 SKIP_SUDO=1 CRON_USER=agent-admin \
+    CRONTAB_FILE="$CD/crontab.good" SYSLOG_FILE="$CD/syslog.fresh" MONITOR_LOG="$CD/monitor.fresh" CRON_LOG="$CD/cron.empty" \
+    "$@" bash "$CC" 2>&1)"; CODE=$?; }
+cc_env "$TMP/none.env" env
+check "g) env 파일 없음 → 7단계 WARN" grep -Eq '\[7/7\] cron 환경의 env 로드 \.\.\. \[WARN\]' <<< "$OUT"
+check "g) WARN 만이면 종료 코드 0" test "$CODE" -eq 0
+printf 'AGENT_PORT=%s\nAGENT_LOG_DIR=%s\n' "$PORT" "$AGENT_LOG_DIR" > "$CD/good.env"
+cc_env "$CD/good.env" env
+check "h) env 로드 성공 → 7단계 OK + 값 표시" grep -Eq "\[7/7\] cron 환경의 env 로드 \.\.\. \[OK\] .*AGENT_PORT=$PORT" <<< "$OUT"
+check "h) 종료 코드 0" test "$CODE" -eq 0
+printf 'AGENT_PORT=(\n' > "$CD/broken.env"
+cc_env "$CD/broken.env" env
+check "i) 문법 오류 env → 7단계 FAIL, 종료 코드 1" bash -c '[[ $1 -eq 1 ]] && grep -Eq "\[7/7\].*\[FAIL\]" <<< "$2"' _ "$CODE" "$OUT"
+# 점검하는 셸에 export 된 값이 env 파일의 기본값 문법(${AGENT_PORT:-...})을 덮으면 cron 과 값이 달라진다
+printf 'AGENT_PORT="${AGENT_PORT:-15034}"\n' > "$CD/default.env"
+cc_env "$CD/default.env" env AGENT_PORT="$PORT"
+check "j) 셸 export 값과 cron 값 불일치 → 7단계 FAIL" grep -Eq '\[7/7\].*\[FAIL\] cron 환경 AGENT_PORT=15034' <<< "$OUT"
+if [[ "$(id -u)" -ne 0 ]]; then
+    cp "$CD/good.env" "$CD/locked.env"; chmod 000 "$CD/locked.env"
+    cc_env "$CD/locked.env" env
+    check "k) 읽을 수 없는 env → 7단계 FAIL" grep -Eq '\[7/7\].*\[FAIL\] .*읽을 수 없습니다' <<< "$OUT"
+    chmod 600 "$CD/locked.env"
+fi
+
+section "알림 훅"
+ALERT="$AGENT_HOME/bin/alert.sh"
+# 가짜 알림 훅: 받은 "LEVEL MESSAGE" 를 "LEVEL|MESSAGE" 한 줄로 기록한다
+cat > "$TMP/fake-alert.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s|%s\n' "\$1" "\$2" >> "$TMP/alerts.txt"
+EOF
+chmod +x "$TMP/fake-alert.sh"
+
+# (1) 임계값 경고 발생 → WARNING 알림 (monitor 종료 코드는 0 유지)
+start_app "$PORT"
+: > "$TMP/alerts.txt"
+OUT="$(ALERT_CMD="$TMP/fake-alert.sh" CPU_WARN=-1 "$MON" --no-stats 2>&1)"; CODE=$?
+check "경고 시 monitor 종료 코드 0" test "$CODE" -eq 0
+check "WARNING 알림 전달" grep -q '^WARNING|CPU threshold exceeded' "$TMP/alerts.txt"
+
+# (2) Health Check 실패 → CRITICAL 알림 (종료 코드 1 유지)
+stop_app
+: > "$TMP/alerts.txt"
+OUT="$(ALERT_CMD="$TMP/fake-alert.sh" "$MON" --no-stats 2>&1)"; CODE=$?
+check "장애 시 monitor 종료 코드 1" test "$CODE" -eq 1
+check "CRITICAL 알림 전달" grep -q '^CRITICAL|' "$TMP/alerts.txt"
+
+# (3) ALERT_CMD 미설정 → 동작 불변 (종료 코드·로그 포맷 그대로)
+start_app "$PORT"
+run_mon
+check "ALERT_CMD 없이 종료 코드 0" test "$CODE" -eq 0
+check "ALERT_CMD 없이 로그 포맷 정상" grep -Eq "$LOG_RE" "$AGENT_LOG_DIR/monitor.log"
+stop_app
+
+# (4) alert.sh 직접: 쿨다운(중복 억제)
+rm -rf "$TMP/st"; : > "$TMP/a.log"
+al() { ALERT_LOGGER=0 ALERT_LOG_FILE="$TMP/a.log" ALERT_STATE_DIR="$TMP/st" "$ALERT" "$@"; }
+al WARNING "CPU threshold exceeded (32.3% > 20%)"
+al WARNING "CPU threshold exceeded (40.1% > 20%)"
+check "쿨다운: 숫자만 다른 같은 경고는 1줄" test "$(wc -l < "$TMP/a.log")" -eq 1
+al CRITICAL "앱 프로세스가 실행 중이 아닙니다"
+check "다른 종류 경고는 추가 전송 → 2줄" test "$(wc -l < "$TMP/a.log")" -eq 2
+ALERT_COOLDOWN_SEC=0 ALERT_LOGGER=0 ALERT_LOG_FILE="$TMP/a.log" ALERT_STATE_DIR="$TMP/st" \
+    "$ALERT" WARNING "CPU threshold exceeded (55.0% > 20%)"
+check "쿨다운 0 이면 재전송 → 3줄" test "$(wc -l < "$TMP/a.log")" -eq 3
 
 printf '\n결과: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# monitor.sh(필수)와 report.sh·log-retention.sh(보너스)를 $AGENT_HOME/bin 에 설치한다.
+# monitor.sh(필수)와 report.sh·log-retention.sh(보너스), 운영 도구 alert.sh·diagnose-port.sh 를 $AGENT_HOME/bin 에 설치한다.
 #
 #   소유자 agent-dev (작성자) : 그룹 agent-core : 권한 750 (rwxr-x---)
 #     agent-dev   → rwx : 수정·실행
@@ -10,7 +10,7 @@ source "$(dirname "$0")/lib.sh"
 require_root
 id agent-dev >/dev/null 2>&1 || [[ "$DRY_RUN" == 1 ]] || die "먼저 setup/03-accounts.sh 를 실행하세요"
 
-for script in monitor.sh report.sh log-retention.sh run-agent.sh; do
+for script in monitor.sh report.sh log-retention.sh run-agent.sh alert.sh diagnose-port.sh; do
     run install -o agent-dev -g agent-core -m 0750 "$REPO_DIR/bin/$script" "$AGENT_HOME/bin/$script"
 done
 
