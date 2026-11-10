@@ -262,7 +262,7 @@ now_ns() { date +%s%N; }
 # monitor.log 가 MAX_LOG_SIZE_BYTES 이상이면 .1 ~ .(MAX_LOG_FILES-1) 로 밀어내고 가장 오래된 파일을 버린다.
 rotate_log() {
     local log="$1" size i keep=$((MAX_LOG_FILES - 1))
-    [[ -f "$log" ]] || return 0
+    [[ -f "$log" && "$(rotation_mode)" == builtin ]] || return 0   # logrotate 를 쓰면 내장 순환은 비켜남 (파일 끝 rotation_mode)
     size="$(stat -c %s "$log" 2>/dev/null || wc -c < "$log")"
     (( size >= MAX_LOG_SIZE_BYTES )) || return 0
     rm -f -- "$log.$keep"
@@ -413,6 +413,19 @@ hint_recovery() {
         port)
             printf '[HINT] 원인 진단: %s/diagnose-port.sh %s (바인딩 주소·포트 충돌·방화벽 8단계)\n' "$SCRIPT_DIR" "$AGENT_PORT" >&2
             printf "[HINT] 바인딩 오류 로그: grep -iE 'already in use|permission denied|bind|fail' %s\n" "$out" >&2 ;;
+    esac
+}
+
+# ================================================================= 순환 방식 (내장 vs logrotate)
+# 같은 monitor.log 를 두 방식이 각자 밀면 보관 개수가 줄고 누가 순환했는지 추적할 수 없다.
+# 그래서 둘 중 하나만 동작하도록 정한다: 기본(auto)은 /etc/logrotate.d/agent-app 이 설치돼 있으면
+# logrotate 에 맡기고 내장 순환을 건너뛴다. setup/09-logrotate.sh 가 설치·해제를 맡는다(docs/operations.md §4).
+LOG_ROTATION="${LOG_ROTATION:-auto}"                       # auto | builtin | logrotate
+LOGROTATE_CONF="${LOGROTATE_CONF:-/etc/logrotate.d/agent-app}"
+rotation_mode() {
+    case "$LOG_ROTATION" in
+        builtin|logrotate) echo "$LOG_ROTATION" ;;
+        *) if [[ -f "$LOGROTATE_CONF" ]]; then echo logrotate; else echo builtin; fi ;;
     esac
 }
 

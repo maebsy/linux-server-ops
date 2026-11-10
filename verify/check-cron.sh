@@ -31,6 +31,8 @@ fi
 
 CRON_USER="${CRON_USER:-agent-admin}"
 CRONTAB_FILE="${CRONTAB_FILE:-}"                       # 설정 시 crontab -u 대신 이 파일을 읽는다 (테스트용)
+ROOT_CRONTAB_FILE="${ROOT_CRONTAB_FILE:-}"             # 설정 시 root crontab 대신 이 파일을 읽는다 (테스트용)
+SYSTEM_CRON_FILES="${SYSTEM_CRON_FILES:-/etc/crontab /etc/cron.d/*}"   # 사용자 칸이 있는 시스템 cron 파일
 AGENT_HOME="${AGENT_HOME:-/home/agent-admin/agent-app}"
 MONITOR_SCRIPT="${MONITOR_SCRIPT:-$AGENT_HOME/bin/monitor.sh}"
 AGENT_LOG_DIR="${AGENT_LOG_DIR:-/var/log/agent-app}"
@@ -118,8 +120,32 @@ if [[ $cron_readable -eq 1 ]]; then
     done <<< "$cron_text"
 fi
 
+# 교차 확인: monitor.sh 는 일반 계정(agent-admin)으로만 돌아야 한다. root 로도 돌면 매분 두 번 실행되고,
+# root 가 순환하며 만든 monitor.log 가 root 소유가 되어 다음 분부터 agent-admin 이 쓰지 못한다(exit 2).
+root_hits=""
+if [[ -n "$ROOT_CRONTAB_FILE" ]]; then
+    root_text="$(cat -- "$ROOT_CRONTAB_FILE" 2>/dev/null)"
+elif [[ "$(id -u)" -eq 0 && "$CRON_USER" != root ]]; then
+    root_text="$(crontab -u root -l 2>/dev/null)"
+else
+    root_text=""
+fi
+root_hits="$(printf '%s\n' "$root_text" | grep -v '^[[:space:]]*#' | grep -F 'monitor.sh' | head -n 1)"
+# shellcheck disable=SC2086  # 공백 구분 목록과 glob 을 그대로 펼친다
+for f in $SYSTEM_CRON_FILES; do
+    [[ -f "$f" && -r "$f" ]] || continue
+    hit="$(awk '!/^[[:space:]]*#/ && /monitor\.sh/ && $6 == "root" { print FILENAME ": " $0; exit }' "$f")"
+    [[ -n "$hit" && -z "$root_hits" ]] && root_hits="$hit"
+done
+
 if [[ $cron_readable -eq 0 ]]; then
     step "crontab 등록" SKIP "crontab 을 읽을 수 없습니다 (root 로 실행하세요)"
+elif [[ "$CRON_USER" == root && -n "$cron_matched" ]]; then
+    step "crontab 등록" FAIL "root 의 crontab 에 등록됨 — root 가 만든 로그 파일은 agent-admin 이 쓰지 못합니다"
+    recover "sudo crontab -u root -e 에서 monitor.sh 줄 삭제 후 sudo bash setup/07-cron.sh (agent-admin 으로 등록)"
+elif [[ -n "$cron_matched" && -n "$root_hits" ]]; then
+    step "crontab 등록" WARN "$CRON_USER 에 등록됐지만 root 에서도 monitor.sh 실행: $root_hits"
+    hint "중복 실행 · root 소유 로그 위험 — root 쪽 줄을 지우세요 (sudo crontab -u root -e)"
 elif [[ -n "$cron_matched" ]]; then
     step "crontab 등록" OK "$cron_matched"
 else

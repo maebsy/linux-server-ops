@@ -34,6 +34,7 @@ check() { local name="$1"; shift; if "$@"; then ok "$name"; else bad "$name" "${
 section() { printf '\n[%s]\n' "$1"; }
 
 export AGENT_HOME="$TMP/agent-app" AGENT_LOG_DIR="$TMP/log" AGENT_PORT="$PORT"
+export LOGROTATE_CONF="$TMP/none.logrotate"   # 호스트에 logrotate 설정이 있어도 내장 순환을 시험
 export AGENT_ENV_FILE="$TMP/none.env" CPU_SAMPLE_SEC=0.2 FIREWALL=ufw UFW_CONF="$TMP/ufw.conf" UFW_USE_STATUS=0
 mkdir -p "$AGENT_HOME/bin" "$AGENT_LOG_DIR"
 echo "ENABLED=yes" > "$UFW_CONF"
@@ -143,6 +144,13 @@ count="${#rotated[@]}"
 check "파일 수 상한 유지 (monitor.log + .1~.3 = 4개)" test "$count" -eq 4
 check "가장 오래된 파일(.4)은 삭제됨" test ! -e "$MONITOR_LOG.4"
 check "순환 직후 새 monitor.log 는 1줄" test "$(wc -l < "$MONITOR_LOG")" -eq 1
+# logrotate 설정이 설치돼 있으면(auto) 내장 순환은 비켜난다 → 두 방식이 같은 파일을 동시에 밀지 않음
+rm -f "$TMP/rot"/monitor.log*; : > "$TMP/agent-app.logrotate"
+head -c 300 /dev/zero | tr '\0' 'x' > "$MONITOR_LOG"
+LOGROTATE_CONF="$TMP/agent-app.logrotate" MAX_LOG_SIZE_BYTES=200 "$MON" --no-stats >/dev/null 2>&1
+check "logrotate 설정이 있으면 내장 순환 안 함 (.1 없음, 기록은 계속)" bash -c '[[ ! -e "$1.1" ]] && grep -q "PID:" "$1"' _ "$MONITOR_LOG"
+LOG_ROTATION=builtin LOGROTATE_CONF="$TMP/agent-app.logrotate" MAX_LOG_SIZE_BYTES=200 "$MON" --no-stats >/dev/null 2>&1
+check "LOG_ROTATION=builtin 이면 설정이 있어도 내장 순환" test -e "$MONITOR_LOG.1"
 unset MONITOR_LOG
 stop_app
 
@@ -266,6 +274,7 @@ printf '[%s] PID:1 CPU:1.0%% MEM:1.0%% DISK_USED:1%%\n' "$(date -d '10 minutes a
 : > "$CD/cron.empty"
 printf '[ERROR] 앱 프로세스가 실행 중이 아닙니다\n' > "$CD/cron.err"
 printf '[ERROR] 앱 프로세스가 실행 중이 아닙니다\n[HINT] 앱 출력·종료 원인: ...\n[HINT] 재기동: ...\n' > "$CD/cron.hint"
+export SYSTEM_CRON_FILES="$TMP/none.cron"   # 호스트의 /etc/crontab · /etc/cron.d 는 보지 않음
 cc_run() { OUT="$(SKIP_SERVICE=1 SKIP_SUDO=1 CRON_USER=agent-admin \
     CRONTAB_FILE="$1" SYSLOG_FILE="$2" MONITOR_LOG="$3" CRON_LOG="$4" MAX_AGE_MIN="${5:-3}" \
     bash "$CC" 2>&1)"; CODE=$?; }
@@ -293,6 +302,19 @@ check "e) RFC3339 syslog 파싱 → 4단계 OK" grep -Eq '\[4/7\] syslog 의 CRO
 
 OUT="$(SKIP_SERVICE=1 SKIP_SUDO=1 bash "$CC" --max-age abc 2>&1)"; CODE=$?
 check "f) --max-age abc → 종료 코드 2" test "$CODE" -eq 2
+
+# 1단계 교차 확인: monitor.sh 는 일반 계정으로만 — root 에도 있으면 WARN, root 로만 있으면 FAIL
+printf '%s\n' "$MLINE" > "$CD/root.crontab"
+OUT="$(ROOT_CRONTAB_FILE="$CD/root.crontab" SKIP_SERVICE=1 SKIP_SUDO=1 CRON_USER=agent-admin CRONTAB_FILE="$CD/crontab.good" \
+    SYSLOG_FILE="$CD/syslog.fresh" MONITOR_LOG="$CD/monitor.fresh" CRON_LOG="$CD/cron.empty" bash "$CC" 2>&1)"; CODE=$?
+check "root crontab 에도 monitor.sh → 1단계 WARN (종료 코드 0)" bash -c 'grep -Eq "\[1/7\] crontab 등록 \.\.\. \[WARN\] .*root" <<< "$1" && [[ $2 -eq 0 ]]' _ "$OUT" "$CODE"
+printf '17 * * * * root /x/monitor.sh\n' > "$CD/system.cron"
+OUT="$(SYSTEM_CRON_FILES="$CD/system.cron" SKIP_SERVICE=1 SKIP_SUDO=1 CRON_USER=agent-admin CRONTAB_FILE="$CD/crontab.good" \
+    SYSLOG_FILE="$CD/syslog.fresh" MONITOR_LOG="$CD/monitor.fresh" CRON_LOG="$CD/cron.empty" bash "$CC" 2>&1)"
+check "/etc/cron.d 형식의 root 실행 줄 → 1단계 WARN" grep -Eq '\[1/7\] crontab 등록 \.\.\. \[WARN\]' <<< "$OUT"
+OUT="$(SKIP_SERVICE=1 SKIP_SUDO=1 CRON_USER=root CRONTAB_FILE="$CD/crontab.good" \
+    SYSLOG_FILE="$CD/syslog.fresh" MONITOR_LOG="$CD/monitor.fresh" CRON_LOG="$CD/cron.empty" bash "$CC" 2>&1)"; CODE=$?
+check "root 로 등록 → 1단계 FAIL, 종료 코드 1" bash -c 'grep -Eq "\[1/7\] crontab 등록 \.\.\. \[FAIL\] root" <<< "$1" && [[ $2 -eq 1 ]]' _ "$OUT" "$CODE"
 
 # 7단계: cron 과 같은 최소 환경(env -i)에서 env 파일 로드
 cc_env() { local f="$1"; shift; OUT="$(AGENT_ENV_FILE="$f" SKIP_SERVICE=1 SKIP_SUDO=1 CRON_USER=agent-admin \

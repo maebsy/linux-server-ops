@@ -37,4 +37,20 @@ info "확인"
 for user in agent-admin agent-dev agent-test; do
     [[ "$DRY_RUN" == 1 ]] || id "$user"
 done
+
+# 계정별 권한 요약 — 그룹 소속에서 나오는 접근 권한을 표로 남겨 설치 로그만 보고도 검증할 수 있게 한다
+#   agent-common → upload_files 읽기·쓰기 / agent-core → api_keys·/var/log/agent-app 읽기·쓰기, monitor.sh 실행
+if [[ "$DRY_RUN" != 1 ]]; then
+    echo
+    info "계정별 권한 요약 (O 허용 / X 불가, password: L 잠김 · P 설정됨 · NP 없음)"
+    printf '  %-12s %-5s %-12s %-10s %-14s %-11s %s\n' user uid agent-common agent-core api_keys·log monitor.sh password
+    for user in agent-admin agent-dev agent-test; do
+        g=" $(id -nG "$user") "
+        common=X; core=X
+        [[ "$g" == *" agent-common "* ]] && common=O
+        [[ "$g" == *" agent-core "* ]] && core=O
+        pw="$(passwd -S "$user" 2>/dev/null | awk '{print $2}')"
+        printf '  %-12s %-5s %-12s %-10s %-14s %-11s %s\n' "$user" "$(id -u "$user")" "$common" "$core" "$core" "$core" "${pw:-?}"
+    done
+fi
 warn "비밀번호는 설정하지 않았습니다(잠긴 계정). 필요하면 'sudo passwd <계정>', 전환은 'sudo -iu agent-admin'"

@@ -20,7 +20,32 @@ run install -o agent-admin -g agent-core -m 0660 /dev/null "$AGENT_LOG_DIR/monit
 run rm -f "$AGENT_LOG_DIR/monitor.log.tmp"
 
 echo
-info "확인"
-[[ "$DRY_RUN" == 1 ]] || ls -l "$AGENT_HOME/bin/"
+info "확인 — 설치된 파일의 소유자·권한을 기대값과 비교"
+mismatch=0
+expect() {   # 경로 '소유자:그룹 권한'
+    local actual
+    actual="$(stat -c '%U:%G %a' "$1" 2>/dev/null || echo missing)"
+    if [[ "$actual" == "$2" ]]; then
+        ok "$(printf '%-50s %s' "$1" "$actual")"
+    else
+        warn "$(printf '%-50s %s (기대 %s)' "$1" "$actual" "$2")"
+        mismatch=$((mismatch + 1))
+    fi
+}
+if [[ "$DRY_RUN" != 1 ]]; then
+    for script in monitor.sh report.sh log-retention.sh run-agent.sh alert.sh diagnose-port.sh; do
+        expect "$AGENT_HOME/bin/$script" "agent-dev:agent-core 750"
+    done
+    expect "$AGENT_LOG_DIR/monitor.log" "agent-admin:agent-core 660"
+    # cron 실행자(agent-admin)가 실제로 실행·기록할 수 있는지 그 계정으로 확인 (root 로는 항상 통과하므로)
+    if sudo -u agent-admin test -x "$AGENT_HOME/bin/monitor.sh" && sudo -u agent-admin test -w "$AGENT_LOG_DIR/monitor.log"; then
+        ok "agent-admin(cron 실행자): monitor.sh 실행 가능 · monitor.log 쓰기 가능"
+    else
+        warn "agent-admin 이 monitor.sh 를 실행하거나 monitor.log 에 쓸 수 없습니다 (agent-core 그룹 · 04-directories.sh 확인)"
+        mismatch=$((mismatch + 1))
+    fi
+    (( mismatch == 0 )) || warn "권한 불일치 ${mismatch}건 — 이 스크립트를 다시 실행하면 기대값으로 설치됩니다"
+fi
 info "용량 관리: monitor.sh 가 기록 직전에 10MB 이상이면 monitor.log.1~.9 로 순환합니다 (최대 10개)."
-info "logrotate 를 쓰고 싶다면 config/logrotate.d/agent-app 참고 (두 방식을 동시에 쓰지 마세요)."
+info "logrotate 로 바꾸려면 sudo bash setup/09-logrotate.sh — 설정이 설치되면 monitor.sh 내장 순환은 자동으로 멈춥니다(둘 중 하나만 동작)."
+info "보존(7일 압축 · 30일 삭제)은 log-retention.sh 가 따로 맡습니다: 순환 = 용량 상한, 보존 = 기간 상한."
