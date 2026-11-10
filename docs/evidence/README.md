@@ -68,6 +68,12 @@
 
 추가 환경: 새로 띄운 `agent-server`(같은 Dockerfile, `logrotate · fail2ban · curl · lsof` 추가 설치 — fail2ban 은 꺼 둔 채로 시작), firewalld 검증용 `fw-server`(같은 이미지에서 ufw 제거 후 firewalld 설치), 바깥 점검용 `ops-laptop`. 27 은 `setup/run-all.sh` 로 새로 구성한 `agent-server` 에서 수집했고, ⑩ 만 nginx 를 apt 로 설치해 측정한 뒤 측정용 설정을 지우고 중지했습니다. 22 · 23 은 각 파일에 적힌 대로 서버에 `fail2ban`(이미지에 포함) · `nginx`(apt 설치)를 켜고 끝에 원래 상태로 되돌렸습니다.
 
+### 3차 동료 평가 반영 (2026-11-10)
+
+| 파일 | 내용 | 3차 피드백 |
+| --- | --- | --- |
+| [`28-feedback-round3.txt`](28-feedback-round3.txt) | 제공 앱(`agent-app.zip` → `agent-app-linux-x86`, 1차와 같은 sha256)으로 새 서버에서: ① sshd 재시작 · 바깥에서 새 포트 응답 ② 방화벽 규칙 후 `ss` ③ 계정별 권한 요약(설치 로그) ④ run-agent.sh Boot Sequence ⑤ `[HINT]` 대로 수동 복구 ⑥ 로그 필드 ⑦ cron 실행 중 장애 → syslog CRITICAL ⑧ `setup/09-logrotate.sh` 전환 → 내장 순환 자동 중지 → 되돌리기 ⑨ ss vs /proc/net/tcp ⑪ 설치 권한 확인 · root crontab 교차 확인 ⑰ nginx https · 인증서 검증 · 만료일 | #1 ~ #12 · #17 |
+
 ## 재현 방법
 
 ```bash

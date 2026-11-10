@@ -14,10 +14,10 @@
 - **재현 가능한 서버 구성** — `setup/` 스크립트 7개(멱등, `DRY_RUN=1` 미리 보기, 설정 백업, `sshd -t` 실패 시 자동 복구)
 - **증빙 자동 수집** — `verify/collect-evidence.sh` 가 체크리스트 8개 항목을 `docs/evidence/*.txt` 로 저장, **계정별 실제 접근 테스트** 매트릭스 포함. `verify/remote-check.sh` 는 다른 PC 에서 포트·SSH 접속을 확인
 - **운영 도구** — 포트 미개방 원인 8단계 진단(`bin/diagnose-port.sh`), cron ↔ syslog ↔ monitor.log 연동 점검(`verify/check-cron.sh`), 경고 알림 훅(`ALERT_CMD` → `bin/alert.sh`, syslog · 웹훅), SSH 무차별 대입 자동 차단(`setup/08-fail2ban.sh`, 선택)
-- **실제 수행 증빙** — systemd 로 부팅한 Ubuntu 22.04 컨테이너에서 setup → 앱 Boot → cron 누적 → 장애 상황 → 로그 보존 → 동료 평가 1·2차 보완(firewalld · nginx 전환 · cron 장애 복구 · 무차별 대입 차단 · 계정 정책 · 응답시간 등)까지 실행한 결과 30개 ([`docs/evidence/`](docs/evidence/README.md))
+- **실제 수행 증빙** — systemd 로 부팅한 Ubuntu 22.04 컨테이너에서 setup → 앱 Boot → cron 누적 → 장애 상황 → 로그 보존 → 동료 평가 1·2·3차 보완(firewalld · nginx 전환 · cron 장애 복구 · 무차별 대입 차단 · 계정 정책 · 응답시간 · logrotate 전환 · TLS 등)까지 실행한 결과 31개 ([`docs/evidence/`](docs/evidence/README.md))
 - **동료 평가 피드백 반영** — 19개 항목의 부족한 점 · 보완을 모두 반영하고 실측으로 확인 ([`docs/feedback-checklist.md`](docs/feedback-checklist.md)), FAIL 이었던 웹서버 전환은 [`docs/webserver-migration.md`](docs/webserver-migration.md)
 - **제공 바이너리로 실제 검증** — Boot Sequence 5단계 통과까지 확인하며 발견한 명세와 실제 동작의 차이를 기록
-- **테스트 117개 + ShellCheck 경고 0** — Ubuntu 22.04 / 24.04 에서 통과
+- **테스트 123개 + ShellCheck 경고 0** — Ubuntu 22.04 / 24.04 에서 통과
 
 ## 목차
 
@@ -53,6 +53,18 @@ sudo bash verify/collect-evidence.sh  # 4) 증빙 수집 → docs/evidence/*.txt
 
 원격(SSH)으로 접속 중이라면 `run-all.sh` 가 **방화벽에 20022 를 먼저 연 뒤** SSH 포트를 바꿉니다. 지금 22번으로 접속해 있다면 `02-firewall.sh` 가 중단하며 `--keep-22` 사용법을 안내합니다. 끝나면 새 터미널에서 `ssh -p 20022` 접속을 확인한 뒤 기존 세션을 닫으세요.
 
+**SSH 설정을 바꾼 뒤 안전 점검** (기존 세션은 끝까지 열어 둔 채로, 실측 [`28`](docs/evidence/28-feedback-round3.txt) ①):
+
+```bash
+sudo sshd -t && sudo systemctl restart ssh && systemctl is-active ssh   # 문법 검사 통과 후에만 재시작 → active
+ss -Hltnp | grep sshd                                                   # 0.0.0.0:20022 · [::]:20022 만, 22 없음
+sudo sshd -T | grep -Ei '^(port|permitrootlogin) '                      # port 20022 · permitrootlogin no
+ssh -p 20022 agent-admin@<서버>                                         # 다른 터미널(다른 PC)에서 새 포트로 접속 성공 확인
+bash verify/remote-check.sh <서버> agent-admin                          # 바깥에서: 20022·15034 open, 22 닫힘, root 거부
+```
+
+새 포트 접속이 확인되기 전에 기존 세션을 닫으면, 설정이 틀렸을 때 서버에 다시 들어갈 방법이 없습니다(콘솔 접근 필요).
+
 ## 구성 요소
 
 | 구분 | 파일 | 역할 |
@@ -64,8 +76,8 @@ sudo bash verify/collect-evidence.sh  # 4) 증빙 수집 → docs/evidence/*.txt
 | 운영 도구 | [`bin/diagnose-port.sh`](bin/diagnose-port.sh) | 프로세스는 있는데 포트가 안 열릴 때 원인 8단계 진단 (바인딩 · 오타 · 충돌 · 권한 · 방화벽) |
 | 운영 도구 | [`bin/alert.sh`](bin/alert.sh) | `ALERT_CMD` 알림 훅 — syslog · 웹훅, 같은 경고는 10분에 1번 |
 | 운영 도구 | [`verify/check-cron.sh`](verify/check-cron.sh) | crontab · cron 서비스 · 실행 권한 · syslog CRON · monitor.log · cron.log · cron 환경(`env -i`) env 로드 7단계 점검과 복구 명령 |
-| 서버 구성 | [`setup/`](setup/) | `01-ssh` `02-firewall` `03-accounts` `04-directories` `05-environment` `06-install-monitor` `07-cron` `08-fail2ban`(선택) `run-all` |
-| 설정 원본 | [`config/`](config/) | sshd 설정 조각, crontab, profile.d, (대안) logrotate, (선택) fail2ban jail, (예시) nginx 관제 env |
+| 서버 구성 | [`setup/`](setup/) | `01-ssh` `02-firewall` `03-accounts` `04-directories` `05-environment` `06-install-monitor` `07-cron` `08-fail2ban`(선택) `09-logrotate`(선택) `run-all` |
+| 설정 원본 | [`config/`](config/) | sshd 설정 조각, crontab, profile.d, logrotate(`config/logrotate.d/agent-app`, `09-logrotate.sh` 로 전환), (선택) fail2ban jail, (예시) nginx 관제 env |
 | 증빙 | [`verify/collect-evidence.sh`](verify/collect-evidence.sh) | 체크리스트 증빙 12개 파일 생성 (`ss -tulnp` 전체, check-cron · diagnose-port 결과 포함) |
 
 ## monitor.sh
@@ -100,6 +112,11 @@ Process   : PID 15491 CPU 19.6% MEM 2.3% RSS 189.4MB Threads 1
 [2026-10-12 17:59:47] PID:15491 CPU:32.3% MEM:10.1% DISK_USED:32%
 [2026-10-12 18:00:49] PID:15491 CPU:14.9% MEM:7.5% DISK_USED:32%
 [2026-10-12 18:01:50] PID:15491 CPU:8.0% MEM:9.3% DISK_USED:32%
+│                     │         │        │        └ 루트 파티션 사용률, % (정수, df Use%)
+│                     │         │        └ 메모리 사용률, % (소수 1자리, MemAvailable 기준)
+│                     │         └ 시스템 CPU 사용률, % (소수 1자리, 1초 동안 측정)
+│                     └ 포트를 연 앱의 PID (바뀌면 재시작된 것)
+└ 기록 시각, 서버 로컬 시간(KST) 초 단위
 ```
 
 | 단계 | 방법 | 실패 시 |
@@ -111,9 +128,20 @@ Process   : PID 15491 CPU 19.6% MEM 2.3% RSS 189.4MB Threads 1
 | MEM | `(MemTotal − MemAvailable) / MemTotal` | |
 | DISK | `df -P /` Use% | |
 | 임계값 | CPU > 20%, MEM > 10%, DISK > 80% | `[WARNING]` |
-| 기록 | `>>` 덧붙이기, 10MB 이상이면 `.1~.9` 순환(최대 10개), `flock` 잠금 | 쓰기 불가면 `exit 2` |
+| 기록 | `>>` 덧붙이기, 10MB 이상이면 `.1~.9` 순환(최대 10개), `flock` 잠금. `/etc/logrotate.d/agent-app` 이 있으면 내장 순환은 건너뛰고 logrotate 에 맡김(둘 중 하나만 동작) | 쓰기 불가면 `exit 2` |
 
 종료 코드: `0` 정상(경고 포함) · `1` Health Check 실패 · `2` 실행 환경 오류.
+
+**실패했을 때 바로 쓰는 명령** — monitor.sh 가 `[ERROR]` 다음 줄 `[HINT]` 로 같은 내용을 안내합니다(실측 [`28`](docs/evidence/28-feedback-round3.txt) ⑤: 안내대로 재기동 → 다시 exit 0).
+
+| 증상 | 확인 | 수동 복구 |
+| --- | --- | --- |
+| `앱 프로세스가 실행 중이 아닙니다` (exit 1) | `tail -n 30 /var/log/agent-app/agent-app.out` | `sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background` |
+| `포트가 LISTEN 상태가 아닙니다` (exit 1) | `sudo bash bin/diagnose-port.sh` (8단계 원인 진단) | 첫 `[FAIL]` 의 `→` 조치 — 예: 포트 선점이면 그 PID 정리 후 재기동 |
+| `로그 디렉토리에 쓸 권한이 없습니다` (exit 2) | `sudo -u agent-admin test -w /var/log/agent-app; echo $?` | `sudo bash setup/04-directories.sh && sudo bash setup/06-install-monitor.sh` |
+| cron 에서만 기록이 안 늘어남 | `sudo bash verify/check-cron.sh` (7단계) | 실패한 단계의 `→ 복구:` 명령 |
+
+**cron 실패 알림** — crontab 은 출력을 `cron.log` 로 보내 cron 메일이 가지 않으므로, env 파일에 `ALERT_CMD=/home/agent-admin/agent-app/bin/alert.sh` 를 넣어 Health Check 실패를 syslog(+웹훅)로 받습니다. cron 자체가 멈춘 경우까지 잡으려면 `check-cron.sh` 를 root crontab 에 주기적으로 겁니다 — 방법 3가지 비교는 [`docs/operations.md` §5](docs/operations.md#5-cron-장애-점검과-복구).
 모든 값은 환경변수로 바꿀 수 있습니다(`CPU_WARN`, `MEM_WARN`, `DISK_WARN`, `AGENT_PORT`, `MAX_LOG_SIZE_BYTES`, `MAX_LOG_FILES`, `APP_PROCESS_REGEX` …, `monitor.sh --help`).
 `ALERT_CMD=…/bin/alert.sh` 를 주면 경고(WARNING)·Health Check 실패(CRITICAL) 때 알림 훅을 실행합니다(결과에는 영향 없음, [`docs/operations.md` §8](docs/operations.md#8-경고-알림-연동)).
 `MONITOR_LOG_FORMAT=extended` 를 주면 프로세스 RSS·스레드 수를 덧붙여 기록합니다(다음 미션 B4-2 장애 분석에서 재사용).
@@ -124,11 +152,13 @@ Process   : PID 15491 CPU 19.6% MEM 2.3% RSS 189.4MB Threads 1
 | 항목 | 설정 |
 | --- | --- |
 | SSH | `Port 20022`, `PermitRootLogin no` (`/etc/ssh/sshd_config.d/00-agent-hardening.conf`) |
+| 무차별 대입 | (선택) fail2ban — 5회 실패/10분 → 1시간 차단, UFW 로 차단 (`sudo bash setup/08-fail2ban.sh`, [`docs/operations.md` §9](docs/operations.md#9-ssh-무차별-대입-대응)) |
 | 방화벽 | UFW: 기본 deny incoming, 허용 `20022/tcp`, `15034/tcp` 만 (firewalld 판도 제공) |
 | 그룹 | `agent-common` = admin, dev, test · `agent-core` = admin, dev |
 | 공유 디렉토리 | `upload_files` — agent-common R/W (setgid + default ACL) |
 | 보안 디렉토리 | `api_keys`, `/var/log/agent-app` — **agent-core 만** R/W, 그 외 접근 불가 |
-| monitor.sh | `agent-dev:agent-core 750`, agent-admin 의 crontab 매분 실행 |
+| monitor.sh | `agent-dev:agent-core 750`, agent-admin 의 crontab 매분 실행 (root crontab 에는 두지 않음 — `check-cron.sh` 가 교차 확인) |
+| 로그 용량 · 보존 | 기본: monitor.sh 내장 순환(10MB × 10개). logrotate 를 원하면 `sudo bash setup/09-logrotate.sh` — 설정이 설치되면 내장 순환은 자동으로 멈춤. 기간 보존은 `log-retention.sh`(7일 압축 · 30일 삭제)가 따로 담당 |
 | 환경변수 | `/etc/agent-app/agent-app.env` 한 곳에서 관리 → 로그인 셸·cron·스크립트가 같은 값 사용 |
 
 | 접근 테스트 | agent-admin | agent-dev | agent-test |
@@ -208,7 +238,7 @@ linux-server-ops/
 │   ├── check-cron.sh         # cron ↔ syslog ↔ monitor.log 연동 점검
 │   └── container/Dockerfile  # 증빙 수집에 쓴 systemd Ubuntu 22.04 환경
 ├── tests/
-│   ├── run-tests.sh          # 117개 항목 (root 로 실행하면 권한 테스트 2개 생략)
+│   ├── run-tests.sh          # 123개 항목 (root 로 실행하면 권한 테스트 2개 생략)
 │   └── fake_agent_app.py     # 테스트용 가짜 앱 (포트 LISTEN)
 └── docs/
     ├── report.md             # 요구사항 수행 내역서 (제출 문서)
@@ -218,7 +248,7 @@ linux-server-ops/
     ├── operations.md         # 운영 매뉴얼 (진단 · 복구 · 알림 · 긴급 대응)
     ├── webserver-migration.md # 관제 대상을 웹서버(nginx)로 바꾸는 가이드 + 실측
     ├── verification.md       # 제공 바이너리로 실제 검증한 기록
-    ├── evidence/             # 실제 수행 증빙 30개 + README(환경 · 재현 방법)
+    ├── evidence/             # 실제 수행 증빙 31개 + README(환경 · 재현 방법)
     └── presentation.html     # 동료 평가 발표 슬라이드
 ```
 

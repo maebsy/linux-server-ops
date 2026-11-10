@@ -6,6 +6,7 @@
 - FAIL 항목 #17 → [`webserver-migration.md`](webserver-migration.md) (웹서버 전환 가이드 + nginx 실측)
 - 새 도구 → `bin/diagnose-port.sh`(포트 미개방 진단), `verify/check-cron.sh`(cron 연동 점검), `bin/alert.sh` + `monitor.sh` 의 `ALERT_CMD`(경고 알림), `setup/08-fail2ban.sh`(무차별 대입 자동 차단)
 - 새 증빙 11개 → `16` ~ `26`
+- **3차 평가(19개, FAIL #8 logrotate)** 보완 → [아래 3차 표](#3차-평가-반영) · 증빙 [`28`](evidence/28-feedback-round3.txt)(제공 앱으로 실측) · `monitor.sh` 가 logrotate 설정을 보면 내장 순환을 건너뜀 + `setup/09-logrotate.sh`
 - **2차 평가(19개, FAIL 1)** 보완 → [아래 2차 표](#2차-평가-반영) · 증빙 [`27`](evidence/27-feedback-round2.txt) · `check-cron.sh` 7단계(cron 환경 env 로드) · `monitor.sh` 실패 시 `[HINT]` 복구 안내
 
 ## 한눈에 보기
@@ -180,11 +181,46 @@
 | 문법이 깨진 env 파일을 source 하면 check-cron.sh 자체가 깨짐 | 7단계 자동 테스트 | source 전에 `bash -n` 으로 문법 확인, 깨진 파일은 7단계에서 FAIL 로 보고 |
 | `PasswordAuthentication yes` 가 켜져 있음(계정이 잠겨 있어 당장은 비밀번호 로그인 불가) | 계정 정책 실측(`27` ①) | 키 접속 확인 후 끄도록 운영 지침에 명시(먼저 끄면 원격 접속이 끊길 수 있어 자동 변경은 하지 않음) |
 
+## 3차 평가 반영
+
+3차 평가(19개, FAIL 1)는 병합된 main 을 기준으로 받았습니다. FAIL #8 은 "logrotate 설정 파일(`config/logrotate.d/agent-app`)이 제출되지 않았다" 였는데, 파일은 1차부터 저장소에 있었지만 **설치하는 방법도, 내장 순환과 함께 켜졌을 때를 막는 장치도 없어서** 눈에 띄지 않았습니다. 그래서 문서 보강에 그치지 않고 **두 방식이 동시에 돌 수 없게 코드로 막고**(`monitor.sh` 가 logrotate 설정을 보면 내장 순환을 건너뜀) 전환 스크립트(`setup/09-logrotate.sh`)를 더했습니다. 나머지 "한 줄 보강" 요청은 설치 로그 · README · 운영 매뉴얼에 넣고, 제공 앱(`agent-app.zip` 의 `agent-app-linux-x86`)으로 새 서버에서 다시 실행해 [`evidence/28-feedback-round3.txt`](evidence/28-feedback-round3.txt) 에 항목 번호(①~⑰)로 모았습니다.
+
+| # | 판정 | 보완 요청 | 반영 | 근거 | 상태 |
+| --- | --- | --- | --- | --- | :---: |
+| 1 | PASS | sshd 재시작 확인 · 원격 접속 안전 점검을 README 에 | README 빠른 시작에 5줄 절차(`sshd -t` → 재시작 → `ss` → 새 포트 접속 → `remote-check.sh`)와 "새 포트 확인 전 기존 세션 닫지 않기" | [`28`](evidence/28-feedback-round3.txt) ①, [README](../README.md#빠른-시작) | ✅ |
+| 2 | PASS | 방화벽 적용 후 `ss` 출력 예시 | 운영 매뉴얼 §10 에 firewalld · UFW 각각 허용 규칙과 `ss` LISTEN 을 나란히 | [`28`](evidence/28-feedback-round3.txt) ②, [`17`](evidence/17-firewalld.txt), [운영 §10](operations.md#10-firewalld-환경-적용) | ✅ |
+| 3 | PASS | 계정별 권한 요약 표를 설치 로그에 | `setup/03-accounts.sh` 가 끝에 user · uid · 그룹 · api_keys·log · monitor.sh · 비밀번호 상태 표를 출력 | [`28`](evidence/28-feedback-round3.txt) ③ | ✅ |
+| 4 | PASS | run-agent.sh 로 실제 Boot Sequence 캡처를 문서에 | 운영 매뉴얼 §12 에 제공 바이너리로 받은 Boot 출력 원문(`Agent READY` 까지) | [`28`](evidence/28-feedback-round3.txt) ④, [운영 §12](operations.md#12-boot-sequence-단계별-확인) | ✅ |
+| 5 | PASS | 헬스체크 실패 시 수동 복구 명령 예시 | README 에 증상 4가지 → 확인 → 수동 복구 표, `[HINT]` 안내대로 재기동해 exit 0 으로 돌아오는 것 실측 | [`28`](evidence/28-feedback-round3.txt) ⑤, [README](../README.md#monitorsh) | ✅ |
+| 6 | PASS | 로그 예시 한 줄을 docs 에 | README · 운영 매뉴얼 §2 에 실제 줄과 필드별 설명 | [`28`](evidence/28-feedback-round3.txt) ⑥, [운영 §2](operations.md#2-monitorlog-포맷과-파싱-예시) | ✅ |
+| 7 | PASS | cron 실패 알림 설정 방법 | 운영 매뉴얼 §5 에 3가지 비교(알림 훅 · check-cron 주기 실행 · MAILTO+메일 발송기 — `>>` 로 보내면 cron 메일이 안 가는 이유 포함). 알림 훅으로 cron 실행 중 장애가 syslog CRITICAL 로 남는 것 실측 | [`28`](evidence/28-feedback-round3.txt) ⑦, [운영 §5](operations.md#5-cron-장애-점검과-복구) | ✅ |
+| **8** | **FAIL** | **logrotate 구성 파일 부재 / 병행 정책** | 파일 `config/logrotate.d/agent-app` 을 README · 설치 로그에서 가리키고, **`monitor.sh` 가 `/etc/logrotate.d/agent-app` 이 있으면 내장 순환을 건너뛰게**(`LOG_ROTATION=auto`) 해 두 방식이 동시에 돌 수 없게 함. `setup/09-logrotate.sh`(설치 · `logrotate -d` 검사 · `--disable`) 추가, 자동 테스트 2개 | [`28`](evidence/28-feedback-round3.txt) ⑧, [운영 §4](operations.md#4-로그-순환-방식-선택-지침-내장-순환-vs-logrotate) | ✅ |
+| 9 | PASS | 명령별(ss vs /proc) 출력 예시 | 운영 매뉴얼 §1 에 `ss` 한 줄과 `/proc/net/tcp` 줄(16진수 3ABA · 상태 0A 읽는 법) | [`28`](evidence/28-feedback-round3.txt) ⑨, [운영 §1](operations.md#1-운영-환경별-선택-기준-컨테이너--vm--물리-서버) | ✅ |
+| 10 | PASS | 샘플 로그 필드 단위 | README 예시에 필드별 단위 주석, 운영 매뉴얼 §2 표에 단위 열 | [README](../README.md#monitorsh), [운영 §2](operations.md#2-monitorlog-포맷과-파싱-예시) | ✅ |
+| 11 | PASS | root 실행 금지를 cron 설정과 교차 확인, 설치 확인 단계에서 소유자·권한 출력 | `setup/06-install-monitor.sh` 가 설치 후 파일별 소유자·권한을 기대값과 비교([ OK ]/[WARN])하고 agent-admin 으로 실행·쓰기 가능 여부 확인. `check-cron.sh` 1단계가 root crontab · `/etc/cron.d` 에 monitor.sh 가 있으면 WARN, root 로만 등록되면 FAIL. 자동 테스트 3개 | [`28`](evidence/28-feedback-round3.txt) ⑪, [운영 §5](operations.md#5-cron-장애-점검과-복구) | ✅ |
+| 12 | PASS | 두 방식 병행 시 우선순위 · 충돌 방지를 설치 문서에 | README 서버 구성 요약 · `06-install-monitor.sh` 안내 · 운영 매뉴얼 §4 에 "순환 = 용량 상한(내장 또는 logrotate 중 하나), 보존 = 기간 상한(log-retention.sh)" | [README](../README.md#서버-구성-요약), [운영 §4](operations.md#4-로그-순환-방식-선택-지침-내장-순환-vs-logrotate) | ✅ |
+| 13 | PASS | fail2ban 추천 · 설정 샘플 | (1차에서 구현) 평가 근거로 본 `00-agent-hardening.conf` 끝과 README 서버 구성 요약에 `setup/08-fail2ban.sh` · jail 위치를 적어 바로 찾게 함 | [`22`](evidence/22-fail2ban.txt), [운영 §9](operations.md#9-ssh-무차별-대입-대응) | ✅ |
+| 14 | PASS | api_keys 접근 로그 검토 주기 | 운영 매뉴얼 §6 에 주기별(매주 · 계정 변경 직후 · 키 교체 직후 · 침해 의심) 검토 표와 `ausearch` 명령, 재부팅 후에도 유지되는 audit 규칙 | [운영 §6](operations.md#6-권한-점검--복구--감사) | ✅ |
+| 15 | PASS | 경고 · 치명도별 알림 정책 예시 | 운영 매뉴얼 §8 에 CRITICAL · WARNING · INFO 별 보내는 곳 · 반복 · 대응 목표 표 | [운영 §8](operations.md#8-경고-알림-연동) | ✅ |
+| 16 | PASS | `>>` 사용 이유를 crontab 예시에 주석으로 | `config/crontab.agent-admin` 의 관제 줄 위 주석에 추가(줄 번호는 그대로) | `config/crontab.agent-admin` 6행 | ✅ |
+| 17 | PASS | 웹서버 전환 체크리스트(접속 URL · TLS) | 전환 가이드 §1 에 접속 URL · 인증서 · HTTP→HTTPS 항목, §8 검증 표에 4줄. nginx 와 시험용 인증서로 https 응답 · 검증 실패(exit 60) · 만료일 판정 실측 | [`28`](evidence/28-feedback-round3.txt) ⑰, [전환 가이드 §1](webserver-migration.md#1-전환-전-체크포인트) | ✅ |
+| 18 | PASS | diagnose-port.sh 결과 예시를 docs 에 | 운영 매뉴얼 §7 에 정상 · 포트 충돌 실제 출력과 읽는 법 | [`21`](evidence/21-port-diagnosis.txt), [운영 §7](operations.md#7-포트-미개방-진단-체크리스트) | ✅ |
+| 19 | PASS | 로그 급증 긴급 삭제 스텝 | 운영 매뉴얼 §11 에 "긴급 삭제 스텝" 7줄(확인 → 큰 곳 → 열린 파일 → 사본 → 비우기 → 보존 정책 → 확보량 기록) | [운영 §11](operations.md#11-로그-급증-긴급-대응) | ✅ |
+
+**3차 보완 중 실제로 찾은 문제**
+
+| 발견 | 어디서 | 조치 |
+| --- | --- | --- |
+| `config/logrotate.d/agent-app` 주석이 `sudo cp` 로 설치하라고 안내 — 그대로 하면 0664 가 되어 logrotate 가 무시(1차 실측과 모순) | FAIL #8 점검 | 주석을 `setup/09-logrotate.sh`(install -m 0644)로 정정 |
+| 전환 스크립트가 설정을 백업(`agent-app.bak.*`)하면 `/etc/logrotate.d` 에 남아 같은 로그 항목이 두 번 읽힘 | 09 작성 중 | `/etc/logrotate.d` 에는 백업을 남기지 않음(원본은 저장소) |
+| `setup/05-environment.sh` 가 env 파일을 통째로 다시 쓰므로, env 에 "내장 순환 끄기" 값을 넣는 예전 방식은 재설치 때 사라져 두 방식이 함께 켜짐 | FAIL #8 설계 | env 대신 logrotate 설정 파일의 존재로 판단하도록 변경 |
+
 ## 검증
 
 ```bash
-bash tests/run-tests.sh      # 117개 = 기존 71 + diagnose-port 13 + check-cron 10 + 알림 훅 9 + 새 스크립트 4개 문법 검사
+bash tests/run-tests.sh      # 117개(2차까지) = 기존 71 + diagnose-port 13 + check-cron 10 + 알림 훅 9 + 새 스크립트 4개 문법 검사
                              #        + 2차: check-cron 7단계 7 · cron.log [HINT] 1 · monitor [HINT] 2 (root 로 실행하면 '읽기 불가' 1개는 건너뜀)
+                             #        + 3차: 순환 방식 2 · root crontab 교차 확인 3 · 09-logrotate.sh 문법 1 → 123개
 ```
 
 새 스크립트 4개(`diagnose-port.sh`, `check-cron.sh`, `alert.sh`, `08-fail2ban.sh`) 포함 모든 스크립트가 ShellCheck 경고 0 입니다.
