@@ -39,7 +39,22 @@ monitor.sh 는 세 환경에서 모두 돌지만, **값을 읽는 소스와 신�
 
 **포트 확인에 `ss` 를 쓰는 이유 (플랫폼별 가용성)** — `ss` 는 iproute2 패키지라 Ubuntu·Debian·RHEL/Rocky 기본 설치에 들어 있고, `netstat` 은 폐기 예정인 net-tools 패키지라 **Ubuntu 22.04 기본 설치에 없습니다**(실측: `dpkg -S /bin/ss` → `iproute2`, `netstat` 없음 — `27-feedback-round2.txt` ⑧). 최소 이미지 컨테이너처럼 둘 다 없는 곳에서는 커널이 직접 내보내는 `/proc/net/tcp` 를 읽습니다. 그래서 monitor.sh 는 `ss` → `/proc/net/tcp` 순서로 시도하고 `netstat` 에는 의존하지 않습니다.
 
-📄 `evidence/16-ports.txt`(포트 탐지 경로), `evidence/README.md`(컨테이너에서 호스트 값이 보임을 명시)
+**명령별 실제 출력** (제공 앱이 15034 를 연 서버, `28-feedback-round3.txt` ⑨):
+
+```console
+$ ss -Hltn 'sport = :15034'                       # 1순위: 한 줄이 나오면 LISTEN
+LISTEN 0      1      0.0.0.0:15034 0.0.0.0:*
+
+$ printf '%04X\n' 15034                           # /proc/net/tcp 는 포트를 16진수로 적는다
+3ABA
+$ awk 'NR==1 || $2 ~ /:3ABA$/' /proc/net/tcp     # 2순위(ss 가 없을 때)
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   2: 00000000:3ABA 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 3303727 …
+```
+
+`local_address 00000000:3ABA` = `0.0.0.0:15034`, `st 0A` = LISTEN, `uid 1000` = agent-admin. monitor.sh 의 `port_listening` 은 이 두 경로를 이 순서로 씁니다.
+
+📄 `evidence/16-ports.txt`(포트 탐지 경로), `evidence/28-feedback-round3.txt` ⑨, `evidence/README.md`(컨테이너에서 호스트 값이 보임을 명시)
 
 ## 2. monitor.log 포맷과 파싱 예시
 
@@ -49,13 +64,13 @@ monitor.sh 는 세 환경에서 모두 돌지만, **값을 읽는 소스와 신�
 [2026-10-12 17:59:47] PID:15491 CPU:32.3% MEM:10.1% DISK_USED:32%
 ```
 
-| 필드 | 예 | 의미 |
+| 필드 | 예 | 단위 · 의미 |
 | --- | --- | --- |
-| `[YYYY-MM-DD HH:MM:SS]` | `[2026-10-12 17:59:47]` | 기록 시각(**서버 로컬 시각**, 이 서버는 `Asia/Seoul` KST +0900). **문자열 정렬 = 시간 정렬**이라 구간 검색을 문자열 비교로 처리 |
-| `PID:<n>` | `PID:15491` | 포트를 가진 실제 앱 PID. 값이 바뀐 줄 = 앱 재시작 시점 |
-| `CPU:<f>%` | `CPU:32.3%` | 시스템 전체 CPU 사용률. `/proc/stat` 을 `CPU_SAMPLE_SEC`(기본 1초) 간격으로 두 번 읽어 `100 × (1 − Δidle/Δtotal)`, 소수 1자리 |
-| `MEM:<f>%` | `MEM:10.1%` | `(MemTotal−MemAvailable)/MemTotal` |
-| `DISK_USED:<n>%` | `DISK_USED:32%` | 루트 파티션 사용률(`df -P /`) |
+| `[YYYY-MM-DD HH:MM:SS]` | `[2026-10-12 17:59:47]` | **시각(초 단위)** — 기록 시각(**서버 로컬 시각**, 이 서버는 `Asia/Seoul` KST +0900). **문자열 정렬 = 시간 정렬**이라 구간 검색을 문자열 비교로 처리 |
+| `PID:<n>` | `PID:15491` | **정수** — 포트를 가진 실제 앱 PID. 값이 바뀐 줄 = 앱 재시작 시점 |
+| `CPU:<f>%` | `CPU:32.3%` | **%(전체 코어 합 100 기준, 소수 1자리)** — 시스템 전체 CPU 사용률. `/proc/stat` 을 `CPU_SAMPLE_SEC`(기본 1초) 간격으로 두 번 읽어 `100 × (1 − Δidle/Δtotal)`, 소수 1자리 |
+| `MEM:<f>%` | `MEM:10.1%` | **%(소수 1자리)** — `(MemTotal−MemAvailable)/MemTotal`, 캐시는 사용 중으로 세지 않음 |
+| `DISK_USED:<n>%` | `DISK_USED:32%` | **%(정수, df 의 Use% 그대로)** — 루트 파티션 사용률(`df -P /`) |
 
 **타임존** — 과제가 정한 `[YYYY-MM-DD HH:MM:SS]` 형식을 지키느라 줄에는 타임존을 쓰지 않습니다. 시각은 **서버 로컬 시각**이고, 이 서버의 타임존은 `timedatectl` 에서 `Asia/Seoul (KST, +0900)` 입니다. UTC 로 남는 다른 서버 로그와 맞춰 볼 때는 변환해서 비교합니다(실측 `27-feedback-round2.txt` ②):
 
@@ -219,8 +234,9 @@ monitor.log 용량 관리는 **monitor.sh 내장 순환(기본)** 과 **logrotat
 **운영 지침**
 
 - **기본은 내장 순환**입니다. 그대로 두면 됩니다.
-- **logrotate 로 전환** 하려면:
-  1. 내장 순환을 끕니다 — env 파일에 `MAX_LOG_SIZE_BYTES=999999999999`(사실상 순환 안 함)를 넣습니다.
+- **두 방식이 동시에 돌지 않게 코드로 막았습니다** — monitor.sh 는 `/etc/logrotate.d/agent-app` 이 **있으면 내장 순환을 건너뜁니다**(`LOG_ROTATION=auto`, 기본값). 그래서 설정 파일 하나를 넣고 빼는 것이 곧 방식 전환이고, 둘 다 켜진 상태나 둘 다 꺼진 상태가 생기지 않습니다. 강제로 고르려면 env 에 `LOG_ROTATION=builtin` 또는 `LOG_ROTATION=logrotate`.
+- **logrotate 로 전환** — 한 줄입니다: `sudo bash setup/09-logrotate.sh` (되돌리기는 `--disable`). 스크립트가 하는 일:
+  1. (예전 방식처럼 `MAX_LOG_SIZE_BYTES` 를 키워 내장 순환을 끌 필요가 없습니다 — 위 자동 전환)
   2. 설정을 설치합니다 — `sudo install -m 0644 -o root -g root config/logrotate.d/agent-app /etc/logrotate.d/agent-app`
      **`cp` 로 그대로 복사하면 안 됩니다**: 저장소에서 받은 파일은 umask 에 따라 `0664` 일 수 있는데, logrotate 는 그룹·기타 쓰기가 가능한 설정 파일을 `error: Ignoring … because it is writable by group or others` 로 **조용히 무시**합니다(실측, `24-logrotate.txt` ②).
   3. 미리 보기로 검증 — `sudo logrotate -d /etc/logrotate.d/agent-app`(`-d` 는 실제로 돌리지 않고 무엇을 할지만 출력)
@@ -232,16 +248,17 @@ monitor.log 용량 관리는 **monitor.sh 내장 순환(기본)** 과 **logrotat
      OnCalendar=hourly
      ```
      (첫 `OnCalendar=` 빈 줄은 기존 하루 1회 설정을 지우는 의미입니다.)
-- **되돌리기**: `sudo rm /etc/logrotate.d/agent-app`, env 의 `MAX_LOG_SIZE_BYTES` 를 원래 값(`10485760`)으로, timer override 는 `sudo systemctl revert logrotate.timer` 로 제거합니다.
-- **둘 다 켜져 있지 않은지 확인** (2줄):
+- **되돌리기**: `sudo bash setup/09-logrotate.sh --disable`(설정 삭제 → 다음 실행부터 내장 순환), timer override 는 `sudo systemctl revert logrotate.timer` 로 제거합니다.
+- **실측** (`28-feedback-round3.txt` ⑧): 설치 후 내장 순환 한도를 200바이트로 낮춰도 monitor.sh 는 순환하지 않았고, `logrotate -f` 가 `monitor.log.1` 을 만들며 새 `monitor.log` 를 `agent-admin:agent-core 0660` 으로 생성, `--disable` 후에는 같은 조건에서 내장 순환이 다시 동작했습니다.
+- **보존(log-retention.sh)과의 관계** — 순환(내장 또는 logrotate)은 **용량 상한**, `log-retention.sh` 는 **기간 상한**(7일 지난 파일 압축 → 30일 지난 압축본 삭제)을 맡아 겹치지 않습니다. 우선순위: 용량이 먼저 차면 순환이 바로 처리하고, 오래된 파일은 매일 03:17 보존 작업이 정리합니다.
+- **지금 어느 방식인지 확인**:
 
   ```bash
-  grep -E '^MAX_LOG_SIZE_BYTES=' /etc/agent-app/agent-app.env   # 큰 값이면 내장 순환 꺼짐
-  ls /etc/logrotate.d/agent-app 2>/dev/null && echo "logrotate 활성" || echo "logrotate 없음"
+  ls /etc/logrotate.d/agent-app 2>/dev/null && echo "logrotate (내장 순환은 건너뜀)" || echo "monitor.sh 내장 순환"
+  grep -E '^LOG_ROTATION=' /etc/agent-app/agent-app.env   # 없으면 auto(위 규칙)
   ```
-  내장 순환이 켜져 있으면(`MAX_LOG_SIZE_BYTES` 가 10MB) logrotate 설정이 **없어야** 정상입니다.
 
-📄 `evidence/24-logrotate.txt`, `evidence/10-log-capacity.txt`
+📄 `evidence/24-logrotate.txt`, `evidence/10-log-capacity.txt`, `evidence/28-feedback-round3.txt` ⑧
 
 ## 5. cron 장애 점검과 복구
 
@@ -297,7 +314,17 @@ journalctl -u cron --since "-10min"                  # systemd-journald 환경
 
 **복구 후 확인 순서**: 복구 명령 실행 → `sudo bash verify/check-cron.sh --user agent-admin` 재실행으로 전 단계 `[OK]` 확인 → 1분 기다렸다가 `wc -l /var/log/agent-app/monitor.log` 가 **늘어나는지** 두 번 비교.
 
-📄 `evidence/09-cron.txt`, `evidence/14-failure-cases.txt`, `evidence/20-cron-check.txt`
+**cron 실패를 알리는 방법** — crontab 의 `>> cron.log 2>&1` 은 출력을 파일로 보내므로 cron 의 기본 메일(`MAILTO`)은 **보내지지 않습니다**. 실패를 사람에게 알리는 방법은 세 가지입니다(위에서부터 권장):
+
+| 방법 | 설정 | 무엇이 알려지나 |
+| --- | --- | --- |
+| ① 알림 훅 | env 파일에 `ALERT_CMD=/home/agent-admin/agent-app/bin/alert.sh` (§8) | Health Check 실패 → syslog `agent-monitor` 에 CRITICAL, 웹훅을 넣으면 메신저로. 실측(`28` ⑦): 앱을 멈추자 다음 분 cron 실행이 `agent-monitor: … [CRITICAL] … 앱 프로세스가 실행 중이 아닙니다` 를 남김 |
+| ② 점검 자체를 주기 실행 | root crontab: `17 * * * * bash …/verify/check-cron.sh >/dev/null 2>&1 \|\| logger -t agent-monitor "check-cron FAIL"` | cron 이 아예 멈춘 경우(①은 cron 이 돌아야 동작)까지 잡음 |
+| ③ cron 메일 | crontab 맨 위 `MAILTO=ops@example.com` + 메일 발송기(`sudo apt install mailutils postfix`), 그리고 실패할 때만 출력이 나오게 `monitor.sh --quiet >> cron.log 2>&1 \|\| echo "monitor.sh exit $?"` | 종료 코드가 0 이 아닐 때 cron 이 그 한 줄을 메일로 보냄. 메일 서버 설정이 필요해 이 저장소의 기본값은 아님 |
+
+**root 실행 교차 확인** — monitor.sh 는 agent-admin 으로만 돌아야 합니다(run-agent.sh 가 root 실행을 막는 것과 같은 원칙). root 로도 돌면 매분 두 번 실행되고, root 가 순환하며 만든 새 `monitor.log` 가 root 소유가 되어 다음 분부터 agent-admin 이 쓰지 못합니다(exit 2). `check-cron.sh` 1단계가 root crontab · `/etc/crontab` · `/etc/cron.d/*` 에 monitor.sh 가 있으면 WARN, agent-admin 대신 root 에만 있으면 FAIL 로 알립니다(실측 `28` ⑪).
+
+📄 `evidence/09-cron.txt`, `evidence/14-failure-cases.txt`, `evidence/20-cron-check.txt`, `evidence/28-feedback-round3.txt` ⑦⑪
 
 ## 6. 권한 점검 · 복구 · 감사
 
@@ -358,6 +385,17 @@ sudo auditctl -w /home/agent-admin/agent-app/api_keys -p rwa -k agent-keys   # �
 sudo ausearch -k agent-keys                                                  # 기록 조회
 ```
 
+**api_keys 접근 기록 검토 주기 (권고)**
+
+| 언제 | 무엇을 | 명령 |
+| --- | --- | --- |
+| 매주 1회 | 지난 7일 접근 중 agent-admin · agent-dev 가 아닌 계정, 업무 시간 밖 접근 | `sudo ausearch -k agent-keys -ts week-ago -i \| grep -E 'uid=' \| sort \| uniq -c` |
+| 계정·그룹 변경 직후 | agent-core 소속 변경, 퇴사·역할 변경 | `getent group agent-core` + 위 명령으로 변경 전후 비교 |
+| 키 교체 직후 | 옛 키를 읽은 프로세스가 남았는지 | `sudo ausearch -k agent-keys -ts today -i` |
+| 침해 의심 시 | 즉시 전체 기록 보존 후 조사 | `sudo ausearch -k agent-keys -i > ~/keys-audit-$(date +%F).txt` |
+
+규칙을 재부팅 후에도 유지하려면 `/etc/audit/rules.d/agent-keys.rules` 에 `-w /home/agent-admin/agent-app/api_keys -p rwa -k agent-keys` 를 넣고 `sudo augenrules --load` 합니다.
+
 **계정 잠금 · 비밀번호 정책 상태** — `setup/03-accounts.sh` 는 비밀번호를 설정하지 않으므로 세 계정은 **잠긴 상태(L)** 로 만들어집니다. 사람은 자기 계정으로 들어와 `sudo -iu agent-admin` 으로 전환합니다(누가 전환했는지 auth.log 에 남음).
 
 | 항목 | 확인 명령 | 현재 값 (실측 `27-feedback-round2.txt` ①) | 의미 / 운영 지침 |
@@ -394,6 +432,30 @@ sudo bash bin/diagnose-port.sh 80 --process '^nginx([: ].*)?$'   # 다른 대상
 | 6/8 | 1024 미만 포트 권한 | WARN: 특권 포트인데 앱이 root 가 아님 → bind 거부 가능 | `getcap $(readlink -f /proc/<PID>/exe)` | 1024 이상 포트 사용, 또는 `setcap cap_net_bind_service=+ep`. **SELinux/AppArmor** 가 바인딩을 막을 수도 있음(해당 환경이면 정책 확인) |
 | 7/8 | 프로세스 State / Threads | WARN: 상태가 `D`(디스크 대기)·`T`(정지) → 멈춰서 응답 못 함 | `cat /proc/<PID>/status \| grep -E 'State\|Threads'` | `D` 는 I/O·스토리지 점검, `T` 는 `kill -CONT <PID>` 또는 재기동 |
 | 8/8 | 방화벽 허용 규칙 | WARN: 포트 허용 규칙이 **없음**(방화벽은 LISTEN 을 막지 않으므로 FAIL 이 아니라 WARN) | `sudo ufw status \| grep 15034` | 허용 규칙 추가(`sudo ufw allow 15034/tcp`). 로컬은 되는데 바깥에서만 막히는 전형적 원인 |
+
+**실제 출력 예** — 정상과 포트 충돌(다른 프로그램이 15034 를 먼저 잡음) 두 경우입니다(`21-port-diagnosis.txt` ①⑥).
+
+```console
+$ sudo bash bin/diagnose-port.sh
+====== PORT DIAGNOSIS (port 15034) ======
+[1/8] 앱 프로세스 ... [OK] 실행 중 (PID: 4757 4759)
+[2/8] 포트 LISTEN ... [OK] LISTEN 중 (0.0.0.0)
+[3/8] 앱이 연 포트 ... [OK] 앱이 15034 포트를 열고 있음
+[4/8] 포트 충돌 ... [OK] 포트 주인이 앱 자신 (PID 4759)
+[5/8] 환경변수 ... [OK] AGENT_PORT=15034 (진단 포트와 일치)
+[6/8] 포트 권한 ... [OK] 포트 15034 는 권한 제약 없음
+[7/8] 프로세스 상태 ... [OK] State=S Threads=1 (정상)
+[8/8] 방화벽 허용 규칙 ... [OK] ufw 가 15034 포트를 ALLOW
+결론: 포트 정상                                         (exit 0)
+
+$ sudo bash bin/diagnose-port.sh                        # 포트 충돌
+[3/8] 앱이 연 포트 ... [WARN] 앱이 아직 어떤 포트도 열지 않음
+[4/8] 포트 충돌 ... [FAIL] 다른 프로세스(PID 5473, python3)가 포트 사용 중
+      → AGENT_PORT 를 바꾸거나 PID 5473 를 정리하세요
+결론: 다른 프로세스(PID 5473, python3)가 포트 사용 중   (exit 1, 나머지 단계는 생략)
+```
+
+읽는 법: 첫 `[FAIL]` 이 원인이고 그 아래 `→` 줄이 조치입니다. `[WARN]` 만 있으면 exit 0 이고 결론에 확인할 건수가 붙습니다.
 
 **원인별 정리**
 
@@ -472,6 +534,16 @@ ALERT_WEBHOOK_URL=https://hooks.example.com/...
 ```
 
 > **⚠ Webhook URL 은 비밀**입니다. `ALERT_WEBHOOK_URL` 을 넣으려면 env 파일 권한을 **`0640 root:agent-core`** 로 유지해(agent-core 만 읽음) 토큰이 world-readable 이 되지 않게 하고, 저장소에는 **넣지 않습니다**. (URL 이 없으면 로컬 `logger` 기록만 하므로 env 를 world-readable 로 두어도 무방합니다.)
+
+**등급별 알림 정책 (예시)** — 등급마다 "누가, 얼마나 빨리" 를 정해 두면 알림이 소음이 되지 않습니다.
+
+| 등급 | 언제 | 보내는 곳 | 반복 | 대응 목표 |
+| --- | --- | --- | --- | --- |
+| **CRITICAL** | Health Check 실패(프로세스 없음 · 포트 닫힘, exit 1), `check-cron.sh` FAIL | syslog `user.crit` + 웹훅(당번 채널) | 같은 내용 10분에 1번(`ALERT_COOLDOWN_SEC=600`), 30분 넘게 계속되면 담당자 직접 호출 | 15분 안에 확인 · 재기동(§12, `[HINT]` 명령) |
+| **WARNING** | CPU/MEM/DISK 임계값 초과, 방화벽 꺼짐 | syslog `user.warning` + 웹훅(모니터링 채널) | 같은 내용 10분에 1번 | 업무 시간 안에 추세 확인(`report.sh`), 하루 넘게 계속되면 임계값·용량 조정 |
+| INFO | 로그 순환, 정상 기록 | monitor.log 만 | — | 알림 없음 |
+
+DISK 는 WARNING 이라도 90% 를 넘으면 곧 서비스 장애(로그 기록 실패 exit 2)로 번지므로 CRITICAL 로 올려 §11 절차를 시작합니다. 이 구분은 `alert.sh` 의 LEVEL 인자로 그대로 전달되므로, 웹훅을 채널별로 나누려면 `ALERT_WEBHOOK_URL` 대신 LEVEL 에 따라 URL 을 고르는 한 줄을 alert.sh 에 추가하면 됩니다.
 
 **동작 순서**
 
@@ -598,6 +670,27 @@ firewall-cmd --permanent --list-ports     # 재부팅 후에도 유지될(perman
 
 > **⚠ UFW 와 동시 사용 금지** — UFW 와 firewalld 는 둘 다 netfilter 를 조작하므로 한 서버에서 **함께 켜면 규칙이 충돌**합니다. firewalld 서버에서는 UFW 를 설치/활성화하지 않습니다.
 
+**규칙 적용 후 `ss` 로 대조** — 방화벽이 연 포트와 실제로 LISTEN 하는 포트가 같아야 합니다. firewalld 서버(`17` ③⑤)와 UFW 서버(`28` ②)에서 본 결과:
+
+```console
+# firewalld
+$ firewall-cmd --list-ports
+15034/tcp 20022/tcp
+$ ss -Hltn | grep -E ':(22|20022|15034|8080)\b'
+LISTEN 1      5            0.0.0.0:15034 0.0.0.0:*
+LISTEN 0      5            0.0.0.0:8080  0.0.0.0:*      ← LISTEN 중이지만 허용 목록 밖 → 바깥에서 No route to host
+LISTEN 0      128          0.0.0.0:20022 0.0.0.0:*
+
+# UFW (제공 앱 실행 중)
+$ ufw status | grep ALLOW
+20022/tcp                  ALLOW IN    Anywhere                   # SSH (sshd Port)
+15034/tcp                  ALLOW IN    Anywhere                   # agent-app
+$ ss -tulnp | awk 'NR==1 || /LISTEN/'
+tcp   LISTEN 0      128          0.0.0.0:20022      0.0.0.0:*    users:(("sshd",pid=1561,fd=3))
+tcp   LISTEN 0      1            0.0.0.0:15034      0.0.0.0:*    users:(("agent-app-linux",pid=1027,fd=4))
+tcp   LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    ← 루프백 전용(내부 DNS)이라 바깥과 무관
+```
+
 **실측에서 확인한 차이** ([`evidence/17-firewalld.txt`](evidence/17-firewalld.txt))
 
 - 허용 목록 밖 포트(서버에서 LISTEN 중인 8080)는 바깥에서 **`No route to host`** 로 즉시 거부됩니다. firewalld 기본 zone(public)은 ICMP host-prohibited 로 **REJECT** 하고, UFW 기본 정책은 응답 없이 **DROP**(timeout) 합니다. 바깥에서 본 증상이 다르므로 `remote-check.sh` 결과를 읽을 때 구분합니다.
@@ -630,6 +723,18 @@ firewall-cmd --permanent --list-ports     # 재부팅 후에도 유지될(perman
 - [ ] **증거 보존 필요 시** 압축 사본을 **다른 디스크**로 옮긴 뒤 처리.
 - [ ] **작업자·승인자 기록** — 누가 언제 무엇을 지웠는지 남김.
 - [ ] **쓰는 중인 파일인지** `lsof` 로 확인(열려 있으면 `rm` 해도 공간이 안 돌아옴).
+
+**긴급 삭제 스텝 (디스크가 꽉 차기 직전, 5분 안에)** — 아래를 순서대로, 한 줄씩 결과를 보고 다음으로 넘어갑니다.
+
+```bash
+df -h /var/log                                                       # 1. 몇 % 인지 기록
+sudo du -xh --max-depth=2 /var/log | sort -h | tail -n 5             # 2. 가장 큰 곳 특정
+sudo lsof +L1 2>/dev/null | head                                     # 3. 이미 지웠는데 열려 있어 공간을 쥔 파일
+gzip -c /var/log/agent-app/<큰 파일> > /mnt/backup/<큰 파일>-$(date +%F).gz   # 4. 다른 디스크에 사본 (보안·감사 로그면 여기서 멈추고 보고)
+: > /var/log/agent-app/<큰 파일>                                     # 5. 내용만 비움 (rm 아님 — 열린 파일도 공간 반환)
+bin/log-retention.sh --dry-run && bin/log-retention.sh               # 6. 지울 대상 확인 후 보존 정책 적용
+df -h /var/log                                                       # 7. 확보량 기록 → 아래 6단계(사후 기록)
+```
 
 **단계별 절차**
 
@@ -697,6 +802,28 @@ run-agent.sh(앱)는 기동 시 5단계를 순서대로 확인하고, **앞 단�
 모두 통과하면 `All Boot Checks Passed!` → `Agent READY` 가 뜨고 포트 LISTEN 이 시작됩니다. 실패하면 `System Boot Failed. Process Terminated.` 로 끝납니다(exit 1).
 
 실측(`18-boot-stages.txt`)에서는 실행 전에 위 "직접 확인하는 명령" 5개를 먼저 돌려 모두 기대값임을 확인한 뒤 앱을 띄웠고, 줄마다 수신 시각을 붙여 보니 5단계 점검부터 `Agent READY` 까지 **약 40ms** 안에 끝났습니다(점검 자체는 매우 빠르고, 실패하면 그 자리에서 종료). 4·5단계 실패는 포트 선점 · 로그 디렉토리 쓰기 권한 회수로 직접 만들어 위 메시지를 확인했고, 1~3단계 실패는 `06b` 에 있습니다.
+
+**run-agent.sh 로 받은 실제 Boot Sequence** (제공 바이너리 `agent-app-linux-x86`, `28-feedback-round3.txt` ④):
+
+```console
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh
+>>> Starting Agent Boot Sequence...
+[1/5] Checking User Account               [OK]
+   ... Running as service user 'agent-admin' (uid=1000)
+[2/5] Verifying Environment Variables     [OK]
+   ... All required Envs correct
+[3/5] Checking Required Files             [OK]
+   ... Verified 'secret.key' with correct key string.
+[4/5] Checking Port Availability          [OK]
+   ... Port 15034 is available.
+[5/5] Verifying Log Permission            [OK]
+   ... Log directory is writable: /var/log/agent-app
+------------------------------------------------------------
+All Boot Checks Passed!
+Agent READY
+2026-11-10 16:26:58,431 [INFO] [SafetyGuard] Process priority lowered (nice=10).
+2026-11-10 16:26:58,431 [INFO] Agent listening at port 15034
+```
 
 **포그라운드 캡처 위치** — 앱을 터미널(포그라운드)로 띄워 `>>> Starting Agent Boot Sequence...` 부터 `All Boot Checks Passed!` → `Agent READY` 까지 받은 원본 출력은 `06a-boot-foreground.txt` 이고, 같은 출력에 줄마다 수신 시각을 붙인 것이 `18-boot-stages.txt` 입니다. 백그라운드로 띄울 때도 같은 출력이 `/var/log/agent-app/agent-app.out` 에 남습니다.
 

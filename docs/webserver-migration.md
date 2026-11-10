@@ -43,6 +43,26 @@
 - [ ] 로그 위치·권한을 확인합니다 — Ubuntu 22.04 의 `/var/log/nginx/*.log` 는 `www-data:adm 0640` 이라(실측) cron 실행자(agent-admin)는 **읽을 수 없습니다**. 읽어야 하면 `sudo setfacl -m g:agent-core:r /var/log/nginx/*.log` + 디렉토리에 `setfacl -m g:agent-core:rx /var/log/nginx`, logrotate 가 새로 만드는 파일에도 적용되도록 `setfacl -d -m g:agent-core:r /var/log/nginx` 를 함께 둡니다. agent-admin 을 `adm` 그룹에 넣는 방법도 있지만 adm 은 auth.log 등 시스템 로그 전체를 읽는 그룹이라 최소 권한에 어긋납니다(그룹 추가는 **재로그인 후** 반영)
 - [ ] 모니터 로그 경로를 분리했는지 확인합니다 — `MONITOR_LOG=/var/log/agent-app/monitor-nginx.log`
 - [ ] Nginx 자체 로그의 logrotate 설정이 있는지 확인합니다 — `test -f /etc/logrotate.d/nginx`
+- [ ] **접속 URL** 을 정해 둡니다 — 사용자가 실제로 쓰는 주소(예: `https://agent.example.com/`)와 관제용 헬스 경로(예: `/health`, 200 만 돌려주는 가벼운 경로). 관제는 이 URL 로 L7 응답을 봅니다
+- [ ] **TLS 인증서** 를 확인합니다 — 파일 위치(`ssl_certificate` · `ssl_certificate_key`), 키 파일 권한(`root 0600`), 만료일(`openssl x509 -noout -enddate -in <crt>`), 도메인 일치(`-subject`), 자동 갱신 여부(certbot 이면 `systemctl list-timers | grep certbot`)
+- [ ] **HTTP → HTTPS** 정책을 정합니다 — 80 은 301 로 443 에 넘기는지(`curl -sI http://<주소>/ | head -n 3` 에 `301` · `Location: https://…`), 아니면 80 을 닫는지
+
+### 접속 URL · TLS 점검 (실측)
+
+같은 서버에 nginx 와 시험용 자체 서명 인증서(30일)로 443 을 열어 확인했습니다([`evidence/28-feedback-round3.txt`](evidence/28-feedback-round3.txt) ⑰).
+
+```bash
+curl -s  -o /dev/null -w '%{http_code}\n' http://127.0.0.1/          # 200  (80 응답)
+curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1/health   # 200  (443 응답, -k = 검증 생략)
+curl -s  -o /dev/null https://127.0.0.1/health; echo $?              # 60   (자체 서명이라 검증 실패가 정상 — 운영 인증서면 0)
+
+# 만료까지 남은 일수 — 14일 미만이면 WARNING (monitor.sh 와 같은 '경고만' 등급)
+end=$(echo | openssl s_client -connect 127.0.0.1:443 -servername agent-server 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2)
+days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+(( days < 14 )) && echo "[WARNING] 인증서 만료까지 ${days}일" || echo "[OK] 인증서 만료까지 ${days}일"   # 실측: [OK] 30일
+```
+
+실측에서 80·443 은 LISTEN 했지만 방화벽에 80·443 규칙이 없어 바깥에서는 접속할 수 없는 상태였습니다 — 위 체크리스트의 방화벽 항목(`ufw allow 443/tcp`)을 빼먹으면 서버 안의 curl 은 성공해도 사용자는 접속하지 못합니다.
 
 ## 2. 프로세스 체크포인트
 
@@ -250,6 +270,10 @@ sudo env AGENT_ENV_FILE=/etc/agent-app/monitor-nginx.env CRON_LOG=/var/log/agent
 | 포트 LISTEN | `ss -ltnp 'sport = :80'` | 80 LISTEN(master=root) |
 | L7 응답 | `curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1/` | `200` |
 | 응답시간 | `curl -o /dev/null -s -w '%{time_total}\n' http://127.0.0.1/` 를 여러 번 (§5 응답시간 측정 예) | p95 가 `LATENCY_WARN_MS`(시작값 200ms) 이하 |
+| 접속 URL | `curl -s -o /dev/null -w '%{http_code}' https://<도메인>/health` (바깥에서) | `200` |
+| TLS 검증 | `curl -s -o /dev/null https://<도메인>/health; echo $?` | `0` (60 이면 인증서 체인·도메인 불일치) |
+| 인증서 만료 | `openssl s_client … \| openssl x509 -noout -enddate` (§1 접속 URL · TLS 점검) | 14일 이상 남음 |
+| HTTP → HTTPS | `curl -sI http://<도메인>/ \| head -n 3` | `301` + `Location: https://…` (또는 80 닫힘) |
 | 바깥 접속 | (다른 PC) `curl -s -o /dev/null -w '%{http_code}' http://<서버>/` | `200` (방화벽 허용 전에는 응답 없음) |
 | 포트 진단 | `sudo bash bin/diagnose-port.sh 80 --process '^nginx([: ].*)?$'` | FAIL 없음(exit 0), 5단계 WARN 은 정상 |
 | cron 기록 | `sudo env AGENT_ENV_FILE=/etc/agent-app/monitor-nginx.env CRON_LOG=/var/log/agent-app/cron-nginx.log bash verify/check-cron.sh` | FAIL 없음(exit 0) |
@@ -272,4 +296,5 @@ Ubuntu 22.04.5 + nginx 1.18.0, agent-app 을 띄운 채로 위 절차를 실행�
 | 로그 | ACL 부여 후 agent-admin 이 5xx 비율 집계 가능 |
 | cron 병행 | 같은 분에 두 줄이 각각 실행, `monitor-nginx.log` · `monitor.log` 각각 매분 누적 |
 | 롤백 | crontab 줄 · env · 80 규칙 · ACL 제거 → agent-app 관제는 그대로 정상 |
+| 접속 URL · TLS (`28` ⑰) | http 200 · https 200, 자체 서명이라 검증 시 curl exit 60(정상), 만료까지 30일 `[OK]`, 방화벽에 443 이 없으면 바깥 접속 불가 |
 | 응답시간 (`27` ⑩) | curl 20회 p50 0.65ms · p95 0.72ms · max 0.82ms, 비200 0건 / `timing.log` 에 `rt=` 기록, p95 판정 `[OK]` |

@@ -1,0 +1,292 @@
+# 3차 동료 평가 보완 실측 — 제공 앱(agent-app.zip, agent-app-linux-x86) 으로 새 서버에서 확인
+# 수집: 2026-11-10 16:29:28 KST · 호스트: agent-server · Ubuntu 22.04.5 LTS
+# 방법: 새 컨테이너에서 setup/run-all.sh 로 구성하고 제공 바이너리를 띄운 뒤 평가 항목별로 직접 실행. 번호는 docs/feedback-checklist.md 3차 표와 같음
+
+## ① sshd 재시작 확인 · 원격 접속 안전 점검 (#1) — 문법 검사 → 재시작 → LISTEN 확인 → 다른 호스트에서 새 포트 응답 확인
+$ sshd -t && echo 'sshd -t: 문법 OK'
+sshd -t: 문법 OK
+(exit code: 0)
+
+$ systemctl restart ssh && systemctl is-active ssh
+active
+(exit code: 0)
+
+$ ss -Hltnp | grep sshd
+LISTEN 0      128          0.0.0.0:20022 0.0.0.0:* users:(("sshd",pid=1561,fd=3))           
+LISTEN 0      128             [::]:20022    [::]:* users:(("sshd",pid=1561,fd=4))           
+(exit code: 0)
+
+$ sshd -T 2>/dev/null | grep -Ei '^(port|permitrootlogin|passwordauthentication) '
+port 20022
+permitrootlogin no
+passwordauthentication yes
+(exit code: 0)
+
+$ (ops-laptop 에서) timeout 3 bash -c "</dev/tcp/agent-server/20022" && echo open
+20022 open
+
+$ (ops-laptop 에서) timeout 3 bash -c "</dev/tcp/agent-server/22"
+22 접속 불가 (exit 124)
+
+$ (ops-laptop 에서) ssh-keyscan -T 3 -p 20022 agent-server | cut -c1-60
+[agent-server]:20022 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQD
+[agent-server]:20022 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTI
+[agent-server]:20022 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGn
+
+→ 새 포트(20022)에서 sshd 가 호스트 키로 응답하고 22 는 닫혀 있음 — 이 확인 뒤에 기존 세션을 닫는다
+
+## ② 방화벽 규칙 적용 후 ss 출력 (#2) — 허용 규칙(20022 · 15034)과 실제 LISTEN 포트가 일치
+$ ufw status verbose | sed -n '1,12p'
+Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
+
+To                         Action      From
+--                         ------      ----
+20022/tcp                  ALLOW IN    Anywhere                   # SSH (sshd Port)
+15034/tcp                  ALLOW IN    Anywhere                   # agent-app
+20022/tcp (v6)             ALLOW IN    Anywhere (v6)              # SSH (sshd Port)
+15034/tcp (v6)             ALLOW IN    Anywhere (v6)              # agent-app
+
+(exit code: 0)
+
+$ ss -tulnp | awk 'NR==1 || /LISTEN/'
+Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                   
+tcp   LISTEN 0      4096      127.0.0.11:41013      0.0.0.0:*                                             
+tcp   LISTEN 0      128          0.0.0.0:20022      0.0.0.0:*    users:(("sshd",pid=1561,fd=3))           
+tcp   LISTEN 0      1            0.0.0.0:15034      0.0.0.0:*    users:(("agent-app-linux",pid=1027,fd=4))
+tcp   LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=46,fd=14)) 
+tcp   LISTEN 0      128             [::]:20022         [::]:*    users:(("sshd",pid=1561,fd=4))           
+(exit code: 0)
+
+→ 바깥 주소(0.0.0.0 / [::])에서 LISTEN 하는 포트는 20022(sshd) · 15034(agent-app) 뿐이고 UFW 허용 규칙과 같다. 127.0.0.11 · 127.0.0.53 은 루프백 전용 내부 DNS.
+
+## ③ 계정별 권한 요약 — setup/03-accounts.sh 설치 로그 (#3)
+$ sed -e 's/\x1b\[[0-9;]*m//g' /root/setup.log | grep -A4 '계정별 권한 요약'
+[INFO] 계정별 권한 요약 (O 허용 / X 불가, password: L 잠김 · P 설정됨 · NP 없음)
+  user         uid   agent-common agent-core api_keys·log  monitor.sh  password
+  agent-admin  1000  O            O          O              O           L
+  agent-dev    1001  O            O          O              O           L
+  agent-test   1002  O            X          X              X           L
+(exit code: 0)
+
+## ④ run-agent.sh 로 실제 Boot Sequence 캡처 (#4) — 백그라운드 앱을 멈추고 포그라운드로 실행, 8초 후 종료
+$ sudo -iu agent-admin timeout 8 /home/agent-admin/agent-app/bin/run-agent.sh 2>&1 | head -n 18
+>>> Starting Agent Boot Sequence...
+[1/5] Checking User Account               [OK]
+   ... Running as service user 'agent-admin' (uid=1000)
+[2/5] Verifying Environment Variables     [OK]
+   ... All required Envs correct
+[3/5] Checking Required Files             [OK]
+   ... Verified 'secret.key' with correct key string.
+[4/5] Checking Port Availability          [FAIL]
+   >>> Port 15034 is already in use.
+[5/5] Verifying Log Permission            [FAIL]
+   >>> Skipped due to previous critical failure.
+--------------------------------------------------
+System Boot Failed. Process Terminated.
+(exit code: 0)
+
+## ⑤ Health Check 실패 → [HINT] 가 알려 준 명령으로 수동 복구 (#5)
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background >/dev/null 2>&1; sleep 3; sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --stop; sleep 2
+[WARN] 실행 중인 백그라운드 앱을 찾지 못했습니다
+(exit code: 0)
+
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/monitor.sh --no-stats; echo "exit=$?"
+====== SYSTEM MONITOR RESULT ======
+
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 1027)
+Checking port 15034... [OK]
+Checking firewall... [OK] (active)
+
+[RESOURCE MONITORING]
+CPU Usage : 9.3%
+MEM Usage : 59.0%
+DISK Used : 30%
+Process   : PID 1027 CPU 48.3% MEM 1.6% RSS 239.5MB Threads 1
+
+[WARNING] MEM threshold exceeded (59.0% > 10%)
+
+[INFO] Log appended: /var/log/agent-app/monitor.log
+exit=0
+(exit code: 0)
+
+### [HINT] 의 재기동 명령을 그대로 실행 → 다시 점검
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background | tail -n 3; sleep 3
+   >>> Skipped due to previous critical failure.
+--------------------------------------------------
+System Boot Failed. Process Terminated.
+(exit code: 0)
+
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/monitor.sh --no-stats | sed -n '3,6p'; echo "exit=${PIPESTATUS[0]}"
+[HEALTH CHECK]
+Checking process 'agent-app'... [OK] (PID: 1027)
+Checking port 15034... [OK]
+Checking firewall... [OK] (active)
+exit=0
+(exit code: 0)
+
+## ⑥ 로그 한 줄과 필드 단위 (#6 · #10)
+$ tail -n 3 /var/log/agent-app/monitor.log
+[2026-11-10 16:29:02] PID:1027 CPU:8.5% MEM:58.0% DISK_USED:30%
+[2026-11-10 16:29:39] PID:1027 CPU:9.3% MEM:59.0% DISK_USED:30%
+[2026-11-10 16:29:45] PID:1027 CPU:8.9% MEM:58.9% DISK_USED:30%
+(exit code: 0)
+
+→ [기록 시각 KST] PID:앱 PID  CPU:시스템 CPU 사용률(%)  MEM:메모리 사용률(%, MemAvailable 기준)  DISK_USED:루트 파티션 사용률(%)
+
+## ⑦ cron 실패 알림 (#7) — ALERT_CMD 를 켜고 앱을 멈추면 다음 분 cron 실행이 syslog 에 CRITICAL 로 남김
+$ echo 'ALERT_CMD=/home/agent-admin/agent-app/bin/alert.sh' >> /etc/agent-app/agent-app.env; tail -n 1 /etc/agent-app/agent-app.env
+ALERT_CMD=/home/agent-admin/agent-app/bin/alert.sh
+(exit code: 0)
+
+$ sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --stop; sleep 75; grep 'agent-monitor' /var/log/syslog | tail -n 2
+[WARN] 실행 중인 백그라운드 앱을 찾지 못했습니다
+Nov 10 16:28:02 agent-server agent-monitor: [2026-11-10 16:28:02] [CRITICAL] host=agent-server 앱 프로세스가 실행 중이 아닙니다 (패턴: ^agent[_-]app([._-].*)?$)
+Nov 10 16:30:02 agent-server agent-monitor: [2026-11-10 16:30:02] [WARNING] host=agent-server MEM threshold exceeded (57.9% > 10%)
+(exit code: 0)
+
+$ tail -n 3 /var/log/agent-app/cron.log
+[HINT] 재기동: sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background
+[WARNING] MEM threshold exceeded (58.0% > 10%)
+[WARNING] MEM threshold exceeded (57.9% > 10%)
+(exit code: 0)
+
+$ sed -i '/^ALERT_CMD=/d' /etc/agent-app/agent-app.env; sudo -iu agent-admin /home/agent-admin/agent-app/bin/run-agent.sh --background >/dev/null 2>&1; sleep 3; ss -Hltn 'sport = :15034'
+LISTEN 0      1      0.0.0.0:15034 0.0.0.0:*
+(exit code: 0)
+
+## ⑧ logrotate 로 전환 (#8 · #12) — setup/09-logrotate.sh 설치 → 내장 순환은 자동으로 멈춤 → logrotate 가 순환 → 되돌리기
+$ cd /srv/linux-server-ops && bash setup/09-logrotate.sh 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g'
+  $ install -o root -g root -m 0644 /srv/linux-server-ops/config/logrotate.d/agent-app /etc/logrotate.d/agent-app
+rotating pattern: /var/log/agent-app/monitor.log  10485760 bytes (9 rotations)
+considering log /var/log/agent-app/monitor.log
+  log does not need rotating (log size is below the 'size' threshold)
+[ OK ] logrotate -d 검사 통과
+
+[INFO] 확인
+[INFO] 현재 순환 방식: logrotate (/etc/logrotate.d/agent-app 있음 → monitor.sh 내장 순환은 건너뜀)
+  root:root 644 /etc/logrotate.d/agent-app
+[INFO] 강제 순환 시험: sudo logrotate -f /etc/logrotate.d/agent-app   (monitor.log → monitor.log.1)
+[INFO] 되돌리기: sudo bash setup/09-logrotate.sh --disable
+(exit code: 0)
+
+### 내장 순환 한도를 200바이트로 낮춰도 monitor.sh 는 순환하지 않음 (logrotate 가 담당)
+$ ls /var/log/agent-app/monitor.log*; sudo -u agent-admin env MAX_LOG_SIZE_BYTES=200 /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >/dev/null; ls /var/log/agent-app/monitor.log*
+/var/log/agent-app/monitor.log
+/var/log/agent-app/monitor.log.1
+/var/log/agent-app/monitor.log.2
+/var/log/agent-app/monitor.log
+/var/log/agent-app/monitor.log.1
+/var/log/agent-app/monitor.log.2
+(exit code: 0)
+
+→ 내장 순환이 logrotate 가 만든 .1 을 .2 로 밀고 새 .1 을 만듦 — 설정을 빼자마자 같은 파일 체계로 이어서 동작한다.
+
+### logrotate 강제 실행 → monitor.log.1 생성, 새 monitor.log 는 create 0660 agent-admin:agent-core
+$ logrotate -f /etc/logrotate.d/agent-app && ls -l /var/log/agent-app/monitor.log /var/log/agent-app/monitor.log.1
+-rw-rw----+ 1 agent-admin agent-core   0 Nov 10 16:31 /var/log/agent-app/monitor.log
+-rw-rw----+ 1 agent-admin agent-core 448 Nov 10 16:31 /var/log/agent-app/monitor.log.1
+(exit code: 0)
+
+$ sudo -u agent-admin /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >/dev/null; wc -l < /var/log/agent-app/monitor.log
+1
+(exit code: 0)
+
+### 되돌리기 → 같은 조건에서 내장 순환이 다시 동작
+$ cd /srv/linux-server-ops && bash setup/09-logrotate.sh --disable 2>&1 | sed -e 's/\x1b\[[0-9;]*m//g'
+  $ rm -f /etc/logrotate.d/agent-app
+
+[INFO] 현재 순환 방식: monitor.sh 내장 순환 (10MB × 10개, /etc/logrotate.d/agent-app 없음)
+(exit code: 0)
+
+$ head -c 300 /dev/zero | tr '\0' x >> /var/log/agent-app/monitor.log; sudo -u agent-admin env MAX_LOG_SIZE_BYTES=200 /home/agent-admin/agent-app/bin/monitor.sh --no-stats | grep 'Log rotated'; ls /var/log/agent-app/monitor.log*
+[INFO] Log rotated: /var/log/agent-app/monitor.log (364 bytes ≥ 200) → /var/log/agent-app/monitor.log.1 (최대 10개 유지)
+/var/log/agent-app/monitor.log
+/var/log/agent-app/monitor.log.1
+/var/log/agent-app/monitor.log.2
+/var/log/agent-app/monitor.log.3
+/var/log/agent-app/monitor.log.4
+(exit code: 0)
+
+## ⑨ 포트 확인 명령별 출력 (#9) — ss 와 /proc/net/tcp (ss 가 없는 최소 설치용)
+$ ss -Hltn 'sport = :15034'
+LISTEN 0      1      0.0.0.0:15034 0.0.0.0:*
+(exit code: 0)
+
+$ printf '15034 → 16진수 %04X\n' 15034; awk 'NR==1 || $2 ~ /:3ABA$/' /proc/net/tcp
+15034 → 16진수 3ABA
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode                                                     
+   2: 00000000:3ABA 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 3303727 1 ffff8e76afa2f200 100 0 0 10 0                   
+(exit code: 0)
+
+→ local_address 00000000:3ABA = 0.0.0.0:15034, st 0A = LISTEN. monitor.sh 는 ss 가 없으면 이 줄로 판단한다.
+
+## ⑪ 설치 확인 출력 · cron 실행 계정 교차 확인 (#11)
+$ sed -e 's/\x1b\[[0-9;]*m//g' /root/setup.log | grep -A9 '설치된 파일의 소유자'
+[INFO] 확인 — 설치된 파일의 소유자·권한을 기대값과 비교
+[ OK ] /home/agent-admin/agent-app/bin/monitor.sh         agent-dev:agent-core 750
+[ OK ] /home/agent-admin/agent-app/bin/report.sh          agent-dev:agent-core 750
+[ OK ] /home/agent-admin/agent-app/bin/log-retention.sh   agent-dev:agent-core 750
+[ OK ] /home/agent-admin/agent-app/bin/run-agent.sh       agent-dev:agent-core 750
+[ OK ] /home/agent-admin/agent-app/bin/alert.sh           agent-dev:agent-core 750
+[ OK ] /home/agent-admin/agent-app/bin/diagnose-port.sh   agent-dev:agent-core 750
+[ OK ] /var/log/agent-app/monitor.log                     agent-admin:agent-core 660
+[ OK ] agent-admin(cron 실행자): monitor.sh 실행 가능 · monitor.log 쓰기 가능
+[INFO] 용량 관리: monitor.sh 가 기록 직전에 10MB 이상이면 monitor.log.1~.9 로 순환합니다 (최대 10개).
+(exit code: 0)
+
+### root crontab 에도 monitor.sh 가 등록된 경우 (실행해도 무해한 --help 로 시험)
+$ echo '* * * * * /home/agent-admin/agent-app/bin/monitor.sh --help >/dev/null' | crontab -u root -; bash /srv/linux-server-ops/verify/check-cron.sh | sed -n '1,3p'
+====== CRON CHECK (user agent-admin) ======
+[1/7] crontab 등록 ... [WARN] agent-admin 에 등록됐지만 root 에서도 monitor.sh 실행: * * * * * /home/agent-admin/agent-app/bin/monitor.sh --help >/dev/null
+      → 중복 실행 · root 소유 로그 위험 — root 쪽 줄을 지우세요 (sudo crontab -u root -e)
+(exit code: 0)
+
+$ crontab -u root -r; bash /srv/linux-server-ops/verify/check-cron.sh | sed -n '2p'
+[1/7] crontab 등록 ... [OK] * * * * * /home/agent-admin/agent-app/bin/monitor.sh --no-stats --quiet >> /var/log/agent-app/cron.log 2>&1
+(exit code: 0)
+
+## ⑰ 웹서버 전환 시 접속 URL · TLS 점검 (#17) — nginx + 시험용 자체 서명 인증서(30일)
+$ cat /etc/nginx/conf.d/tls-test.conf
+server {
+    listen 443 ssl;
+    server_name agent-server;
+    ssl_certificate     /etc/ssl/certs/agent-test.crt;
+    ssl_certificate_key /etc/ssl/private/agent-test.key;
+    location /health { return 200 "ok\n"; }
+}
+(exit code: 0)
+
+$ nginx -t 2>&1 && systemctl restart nginx && ss -Hltn '( sport = :80 or sport = :443 )'
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+LISTEN 0      511    0.0.0.0:80  0.0.0.0:*
+LISTEN 0      511    0.0.0.0:443 0.0.0.0:*
+LISTEN 0      511       [::]:80     [::]:*
+(exit code: 0)
+
+### 접속 URL — http(80) 과 https(443) 의 응답 코드
+$ curl -s -o /dev/null -w 'http://127.0.0.1/        %{http_code}\n' http://127.0.0.1/; curl -sk -o /dev/null -w 'https://127.0.0.1/health %{http_code}\n' https://127.0.0.1/health
+http://127.0.0.1/        200
+https://127.0.0.1/health 200
+(exit code: 0)
+
+### 인증서 검증 — 자체 서명이라 -k 없이 검증하면 실패해야 정상 (운영 인증서면 0)
+$ curl -s -o /dev/null https://127.0.0.1/health; echo "curl exit=$? (60 = 인증서 검증 실패)"
+curl exit=60 (60 = 인증서 검증 실패)
+(exit code: 0)
+
+### 인증서 만료일과 남은 일수 — 14일 미만이면 WARNING
+$ end=$(echo | openssl s_client -connect 127.0.0.1:443 -servername agent-server 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2); echo "notAfter=$end"; days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 )); if (( days < 14 )); then echo "[WARNING] 인증서 만료까지 ${days}일"; else echo "[OK] 인증서 만료까지 ${days}일"; fi
+notAfter=Dec 10 07:31:34 2026 GMT
+[OK] 인증서 만료까지 30일
+(exit code: 0)
+
+$ ufw status | grep -E '^(80|443)/' || echo '방화벽에 80·443 허용 규칙 없음 → 바깥에서는 접속 불가 (전환 절차에서 ufw allow 443/tcp)'
+방화벽에 80·443 허용 규칙 없음 → 바깥에서는 접속 불가 (전환 절차에서 ufw allow 443/tcp)
+(exit code: 0)
+
+(정리: 시험용 설정·인증서 삭제, nginx 중지)
